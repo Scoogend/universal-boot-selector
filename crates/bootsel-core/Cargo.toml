@@ -1,0 +1,20 @@
+[package]
+name = "bootsel-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Coeur pur d'Universal Boot Selector : parsing UEFI, modele, invariants de securite. Aucune E/S systeme."
+
+[features]
+default = []
+# Expose les constructeurs de fixtures UEFI binaires aux autres crates
+# (backend mock, tests d'integration). Jamais active en release.
+testdata = []
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }

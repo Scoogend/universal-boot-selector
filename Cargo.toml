@@ -1,0 +1,28 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/bootsel-core",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "MIT"
+authors = ["Universal Boot Selector"]
+
+[workspace.dependencies]
+bootsel-core = { path = "crates/bootsel-core" }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+thiserror = "2"
+tracing = "0.1"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

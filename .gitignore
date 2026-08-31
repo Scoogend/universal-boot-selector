@@ -1,0 +1,10 @@
+/target
+**/target
+node_modules/
+dist/
+*.log
+.DS_Store
+Thumbs.db
+
+# Rien de sensible ne doit jamais entrer ici de toute facon :
+# l'application ne manipule aucun secret.
