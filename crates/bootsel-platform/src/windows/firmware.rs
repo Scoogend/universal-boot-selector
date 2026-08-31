@@ -21,10 +21,16 @@ use bootsel_core::model::{
 };
 use std::collections::BTreeMap;
 use windows::core::PCWSTR;
+use std::sync::OnceLock;
 use windows::Win32::Foundation::{
-    GetLastError, ERROR_ENVVAR_NOT_FOUND, ERROR_INVALID_FUNCTION, ERROR_PRIVILEGE_NOT_HELD,
-    WIN32_ERROR,
+    CloseHandle, GetLastError, ERROR_ENVVAR_NOT_FOUND, ERROR_INVALID_FUNCTION,
+    ERROR_NOT_ALL_ASSIGNED, ERROR_PRIVILEGE_NOT_HELD, HANDLE, LUID, WIN32_ERROR,
 };
+use windows::Win32::Security::{
+    AdjustTokenPrivileges, LookupPrivilegeValueW, LUID_AND_ATTRIBUTES, SE_PRIVILEGE_ENABLED,
+    SE_SYSTEM_ENVIRONMENT_NAME, TOKEN_ADJUST_PRIVILEGES, TOKEN_PRIVILEGES, TOKEN_QUERY,
+};
+use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 use windows::Win32::System::SystemInformation::{
     FirmwareTypeUefi, GetFirmwareType, FIRMWARE_TYPE,
 };
@@ -82,6 +88,10 @@ enum ReadOutcome {
 
 /// Lit une variable du firmware. **Lecture seule, privilegiee.**
 fn read_variable(name: &str) -> Result<ReadOutcome, BackendError> {
+    // Etre administrateur ne suffit pas : le privilege est present dans le
+    // jeton mais desactive par defaut. Il faut l'activer explicitement.
+    enable_firmware_privilege()?;
+
     let name_w = wide(name);
     let guid_w = wide(EFI_GLOBAL_GUID);
     let mut buffer = vec![0u8; MAX_VARIABLE_SIZE];
@@ -250,5 +260,164 @@ mod tests {
             Err(BackendError::NotUefi) => { /* machine en BIOS herite */ }
             Err(e) => panic!("echec inattendu : {e}"),
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Activation du privilege de lecture du firmware
+// ---------------------------------------------------------------------------
+
+/// Resultat memorise de l'activation du privilege : l'operation est faite une
+/// seule fois par processus.
+static PRIVILEGE: OnceLock<Result<(), BackendError>> = OnceLock::new();
+
+/// Active `SeSystemEnvironmentPrivilege` dans le jeton du processus courant.
+///
+/// # Pourquoi c'est necessaire
+///
+/// Appartenir au groupe Administrateurs ne suffit pas. Le privilege est bien
+/// present dans le jeton d'un processus eleve, mais **desactive** : Windows
+/// exige qu'un programme demande explicitement l'activation de chaque
+/// privilege sensible avant de s'en servir. Sans cette etape,
+/// `GetFirmwareEnvironmentVariableW` echoue avec `ERROR_PRIVILEGE_NOT_HELD`
+/// meme dans un terminal administrateur — comportement constate sur la machine
+/// de developpement.
+///
+/// # Pourquoi c'est sans danger
+///
+/// Cette fonction n'**accorde** aucun droit : elle ne peut qu'activer un
+/// privilege que l'utilisateur possede deja. Sur un jeton non eleve, l'appel
+/// echoue avec `ERROR_NOT_ALL_ASSIGNED` et rien ne change. Elle ne modifie que
+/// le jeton du processus courant, qui disparait a la sortie ; ni le systeme,
+/// ni le compte utilisateur, ni aucun autre processus n'en garde trace.
+///
+/// Le privilege active autorise la lecture **et** l'ecriture des variables du
+/// firmware. C'est precisement pour cela que ce processus ne definit aucune
+/// fonction d'ecriture : la capacite existe au niveau du systeme, mais aucun
+/// chemin de code ici ne permet de s'en servir.
+fn enable_firmware_privilege() -> Result<(), BackendError> {
+    PRIVILEGE.get_or_init(adjust_privilege).clone()
+}
+
+fn adjust_privilege() -> Result<(), BackendError> {
+    let mut token = HANDLE::default();
+
+    // SAFETY: `GetCurrentProcess` renvoie un pseudo-handle toujours valide qui
+    // n'a pas a etre ferme. `token` est une variable locale valide qui recoit
+    // le handle du jeton.
+    unsafe {
+        OpenProcessToken(
+            GetCurrentProcess(),
+            TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY,
+            &mut token,
+        )
+    }
+    .map_err(|e| {
+        BackendError::FirmwareUnavailable(format!("ouverture du jeton de processus : {e}"))
+    })?;
+
+    let result = configure_privilege(token);
+
+    // SAFETY: `token` provient d'un `OpenProcessToken` reussi et n'a pas encore
+    // ete ferme. Il n'est plus utilise apres cet appel.
+    let _ = unsafe { CloseHandle(token) };
+
+    result
+}
+
+fn configure_privilege(token: HANDLE) -> Result<(), BackendError> {
+    let mut luid = LUID::default();
+
+    // SAFETY: `SE_SYSTEM_ENVIRONMENT_NAME` est une chaine large statique
+    // terminee par un nul, fournie par la bibliotheque. `luid` est une variable
+    // locale valide qui recoit l'identifiant du privilege.
+    unsafe { LookupPrivilegeValueW(None, SE_SYSTEM_ENVIRONMENT_NAME, &mut luid) }.map_err(|e| {
+        BackendError::FirmwareUnavailable(format!("privilege introuvable : {e}"))
+    })?;
+
+    let privileges = TOKEN_PRIVILEGES {
+        PrivilegeCount: 1,
+        Privileges: [LUID_AND_ATTRIBUTES {
+            Luid: luid,
+            Attributes: SE_PRIVILEGE_ENABLED,
+        }],
+    };
+
+    // SAFETY: `token` est un handle valide ouvert avec TOKEN_ADJUST_PRIVILEGES.
+    // `privileges` decrit exactement un privilege, ce qu'annonce
+    // `PrivilegeCount`, et sa taille est calculee a partir du type lui-meme.
+    // Aucun etat precedent n'est demande, donc les deux derniers arguments sont
+    // nuls, ce qui est explicitement autorise.
+    let adjusted = unsafe {
+        AdjustTokenPrivileges(
+            token,
+            false,
+            Some(&privileges),
+            std::mem::size_of::<TOKEN_PRIVILEGES>() as u32,
+            None,
+            None,
+        )
+    };
+
+    // Piege classique de cette API : elle renvoie un succes meme lorsqu'elle
+    // n'a rien pu activer. Seul `GetLastError` dit la verite.
+    //
+    // SAFETY: appel sans argument, sans effet de bord observable.
+    let last = unsafe { GetLastError() };
+
+    match adjusted {
+        Ok(()) if last == ERROR_NOT_ALL_ASSIGNED => Err(BackendError::PrivilegeRequired),
+        Ok(()) => Ok(()),
+        Err(e) => Err(BackendError::FirmwareUnavailable(format!(
+            "activation du privilege refusee : {e}"
+        ))),
+    }
+}
+
+#[cfg(test)]
+mod privilege_tests {
+    use super::*;
+
+    #[test]
+    fn enabling_the_privilege_is_idempotent_and_never_panics() {
+        let first = enable_firmware_privilege();
+        let second = enable_firmware_privilege();
+        assert_eq!(first, second, "le resultat doit etre memorise");
+
+        // Selon l'elevation de la session, les deux issues sont legitimes.
+        match first {
+            Ok(()) => { /* session elevee */ }
+            Err(BackendError::PrivilegeRequired) => { /* session normale */ }
+            Err(e) => panic!("echec inattendu : {e}"),
+        }
+    }
+
+    #[test]
+    fn the_privilege_name_is_the_one_windows_expects() {
+        // Garde-fou : une faute de frappe rendrait la lecture impossible avec
+        // une erreur difficile a diagnostiquer.
+        let expected: Vec<u16> = "SeSystemEnvironmentPrivilege"
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+
+        // SAFETY: la constante est une chaine large statique terminee par un
+        // nul ; on ne lit que jusqu'a ce terminateur.
+        let actual: Vec<u16> = unsafe {
+            let ptr = SE_SYSTEM_ENVIRONMENT_NAME.0;
+            let mut out = Vec::new();
+            let mut i = 0;
+            loop {
+                let c = *ptr.add(i);
+                out.push(c);
+                if c == 0 {
+                    break;
+                }
+                i += 1;
+            }
+            out
+        };
+
+        assert_eq!(actual, expected);
     }
 }
