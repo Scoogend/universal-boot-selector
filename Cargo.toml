@@ -1,7 +1,8 @@
-[workspace]
+﻿[workspace]
 resolver = "2"
 members = [
     "crates/bootsel-core",
+    "crates/bootsel-platform",
 ]
 
 [workspace.package]

@@ -90,7 +90,10 @@ impl BackendError {
 }
 
 /// Acces au firmware. Une seule methode ecrit : [`BootBackend::set_boot_next`].
-pub trait BootBackend: Send + Sync {
+///
+/// `Debug` est requis pour que les journaux puissent nommer le backend actif
+/// sans supposition, y compris derriere un `Box<dyn BootBackend>`.
+pub trait BootBackend: Send + Sync + std::fmt::Debug {
     /// Mode de demarrage de la machine. Lecture seule, non privilegiee.
     fn firmware_mode(&self) -> Result<FirmwareMode, BackendError>;
 

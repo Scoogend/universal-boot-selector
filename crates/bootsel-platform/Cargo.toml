@@ -1,0 +1,29 @@
+[package]
+name = "bootsel-platform"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Detection en lecture seule du firmware et du stockage, pour Windows et Linux."
+
+[features]
+default = []
+# Rend le backend simule accessible aux binaires (option --mock-boot).
+mock = ["bootsel-core/testdata"]
+
+[dependencies]
+bootsel-core = { workspace = true }
+serde = { workspace = true }
+tracing = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_System_SystemInformation",
+    "Win32_System_WindowsProgramming",
+] }
+wmi = "0.18"
+
+[dev-dependencies]
+bootsel-core = { workspace = true, features = ["testdata"] }
