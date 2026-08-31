@@ -148,6 +148,8 @@ fn print_detection(detection: &bootsel_core::detect::Detection) {
         println!("        etat : {state}");
     }
 
+    print_unlisted_media(detection);
+
     if !detection.warnings.is_empty() {
         println!("\nAvertissements");
         for w in &detection.warnings {
@@ -156,6 +158,29 @@ fn print_detection(detection: &bootsel_core::detect::Detection) {
     }
 
     println!("\nAucune modification n'a ete effectuee.");
+}
+
+/// Affiche les supports bootables qu'aucune entree UEFI ne designe.
+///
+/// Ils ne sont jamais presentes comme selectionnables : sans entree
+/// `Boot####`, `BootNext` n'a rien a cibler, et en creer une est interdit.
+fn print_unlisted_media(detection: &bootsel_core::detect::Detection) {
+    if detection.unlisted_media.is_empty() {
+        return;
+    }
+
+    println!("
+Supports bootables sans entree UEFI ({})", detection.unlisted_media.len());
+    for m in &detection.unlisted_media {
+        println!("  {} — {}", m.display_name, m.device_label);
+        println!(
+            "        ESP en partition {} · {} · non selectionnable",
+            m.esp_partition,
+            m.confidence.label()
+        );
+        println!("        {}", m.reason);
+        println!("        {}", m.suggestion);
+    }
 }
 
 fn print_help() {

@@ -10,6 +10,7 @@ use crate::backend::{BackendError, BootBackend};
 use crate::efi::LoadOption;
 use crate::identify;
 use crate::identity::stable_id_for;
+use crate::media::{find_unlisted_media, UnlistedMedium};
 use crate::model::{
     Availability, BootEntry, BootId, Confidence, FirmwareMode, FirmwareState, OsKind,
     StorageDevice,
@@ -23,6 +24,9 @@ pub struct Detection {
     /// Entrees dans l'ordre d'affichage.
     pub entries: Vec<BootEntry>,
     pub devices: Vec<StorageDevice>,
+    /// Supports portant une ESP mais qu'aucune entree du firmware ne designe.
+    /// Affiches, jamais selectionnables : voir [`crate::media`].
+    pub unlisted_media: Vec<UnlistedMedium>,
     /// Ordre de demarrage permanent, affiche a titre informatif. Jamais modifie.
     pub boot_order: Option<Vec<BootId>>,
     /// Demarrage unique deja programme, s'il y en a un.
@@ -58,6 +62,7 @@ pub fn detect(backend: &dyn BootBackend, config: &Config) -> Result<Detection, B
         return Ok(Detection {
             firmware_mode,
             entries: Vec::new(),
+            unlisted_media: Vec::new(),
             devices,
             boot_order: None,
             boot_next: None,
@@ -72,10 +77,12 @@ pub fn detect(backend: &dyn BootBackend, config: &Config) -> Result<Detection, B
 
     let state = backend.read_state()?;
     let (entries, warnings) = build_entries(&state, &devices, config);
+    let unlisted_media = find_unlisted_media(&devices, &entries);
 
     Ok(Detection {
         firmware_mode,
         entries,
+        unlisted_media,
         devices,
         boot_order: state.boot_order(),
         boot_next: state.boot_next(),
@@ -421,6 +428,7 @@ mod tests {
         let detection = Detection {
             firmware_mode: FirmwareMode::Uefi,
             entries,
+            unlisted_media: Vec::new(),
             devices,
             boot_order: None,
             boot_next: None,

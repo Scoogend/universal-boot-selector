@@ -24,6 +24,8 @@
 //! - [`identify`] — heuristiques d'identification des systemes et chargeurs.
 //! - [`identity`] — derivation de la cle stable servant aux alias.
 //! - [`alias`] — configuration locale : alias et preferences d'affichage.
+//! - [`gpt`] — roles des partitions, deduits de leur GUID de type.
+//! - [`media`] — supports bootables qu'aucune entree UEFI ne designe.
 //! - [`detect`] — assemblage de la liste affichable. Lecture seule.
 //! - [`select`] — sequence de selection, avec revalidation avant ecriture.
 //! - [`guard`] — verification que seule `BootNext` a change.
@@ -45,9 +47,11 @@ pub mod alias;
 pub mod backend;
 pub mod detect;
 pub mod efi;
+pub mod gpt;
 pub mod guard;
 pub mod identify;
 pub mod identity;
+pub mod media;
 pub mod model;
 pub mod select;
 
@@ -57,7 +61,9 @@ pub mod mock;
 pub use alias::Config;
 pub use backend::{BackendError, BootBackend};
 pub use detect::{detect, Detection};
+pub use gpt::{role_of, PartitionRole};
 pub use guard::{GuardError, VarChange};
+pub use media::{find_unlisted_media, UnlistedMedium};
 pub use model::{
     Availability, BootEntry, BootId, BootloaderKind, BusType, Confidence, FirmwareMode,
     FirmwareState, OsKind, PartitionInfo, StorageDevice, VAR_BOOT_CURRENT, VAR_BOOT_NEXT,
