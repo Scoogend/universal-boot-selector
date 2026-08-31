@@ -4,6 +4,7 @@ members = [
     "crates/bootsel-core",
     "crates/bootsel-platform",
     "crates/bootsel-helper",
+    "crates/bootsel-ui",
 ]
 
 [workspace.package]

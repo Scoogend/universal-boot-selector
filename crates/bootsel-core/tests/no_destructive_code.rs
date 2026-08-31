@@ -145,6 +145,9 @@ const PRIVILEGED_ALLOWLIST: &[&str] = &[
     // Backends systeme : lecture du firmware et redemarrage, apres validation.
     "crates/bootsel-platform/src/windows/firmware.rs",
     "crates/bootsel-platform/src/windows/power.rs",
+    // Seule commande de l interface qui arme le redemarrage, et uniquement
+    // apres validation du garde-fou. Voir SECURITY.md.
+    "crates/bootsel-ui/src/commands.rs",
     "crates/bootsel-platform/src/linux/firmware.rs",
     "crates/bootsel-platform/src/linux/power.rs",
 ];

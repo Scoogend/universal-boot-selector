@@ -1,0 +1,26 @@
+[package]
+name = "bootsel-ui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Interface d'Universal Boot Selector. Processus non privilegie."
+
+[[bin]]
+name = "bootsel"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+bootsel-core = { workspace = true, features = ["testdata"] }
+bootsel-platform = { path = "../bootsel-platform", features = ["mock"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tauri = { version = "2", features = [] }
+
+[features]
+# Tauri utilise cette convention pour le mode production.
+custom-protocol = ["tauri/custom-protocol"]
