@@ -26,6 +26,7 @@
 //! - [`alias`] — configuration locale : alias et preferences d'affichage.
 //! - [`gpt`] — roles des partitions, deduits de leur GUID de type.
 //! - [`media`] — supports bootables qu'aucune entree UEFI ne designe.
+//! - [`ipc`] — protocole entre l'interface et le helper privilegie.
 //! - [`detect`] — assemblage de la liste affichable. Lecture seule.
 //! - [`select`] — sequence de selection, avec revalidation avant ecriture.
 //! - [`guard`] — verification que seule `BootNext` a change.
@@ -51,6 +52,7 @@ pub mod gpt;
 pub mod guard;
 pub mod identify;
 pub mod identity;
+pub mod ipc;
 pub mod media;
 pub mod model;
 pub mod select;

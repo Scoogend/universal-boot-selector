@@ -5,7 +5,9 @@
 //! operations tant qu'aucun canal vers le helper n'a ete etabli, ce qui rend
 //! structurellement impossible qu'un bug de l'interface declenche une ecriture.
 
+pub mod elevated;
 pub mod firmware;
+pub mod power;
 pub mod storage;
 
 use bootsel_core::backend::{BackendError, BootBackend};
@@ -61,7 +63,8 @@ impl BootBackend for WindowsBootBackend {
         if self.read_only {
             return Err(BackendError::ReadOnlyMode);
         }
-        Err(BackendError::PrivilegeRequired)
+        // Redemarrer ne demande aucune elevation.
+        power::reboot()
     }
 
     fn is_read_only(&self) -> bool {
@@ -86,10 +89,25 @@ mod tests {
     }
 
     #[test]
-    fn the_default_backend_cannot_write_either_without_the_helper() {
+    fn the_default_backend_cannot_write_without_the_helper() {
         let b = WindowsBootBackend::new();
         assert_eq!(b.set_boot_next(BootId(2)), Err(BackendError::PrivilegeRequired));
-        assert_eq!(b.reboot(), Err(BackendError::PrivilegeRequired));
+    }
+
+    #[test]
+    fn reboot_is_refused_unless_the_application_armed_it() {
+        // Ce test avait fait redemarrer la machine de developpement : il
+        // appelait `reboot()` sur un backend reel, dans une session elevee,
+        // en supposant que la fonction ne faisait rien. Le verrou d armement
+        // de `power` rend desormais cet accident impossible.
+        assert!(
+            !power::is_reboot_armed(),
+            "aucun test ne doit armer le redemarrage"
+        );
+        assert!(matches!(
+            WindowsBootBackend::new().reboot(),
+            Err(BackendError::Unsupported(_))
+        ));
     }
 
     #[test]

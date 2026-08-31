@@ -1,0 +1,25 @@
+[package]
+name = "bootsel-helper"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Helper privilegie d'Universal Boot Selector. Ecrit BootNext, et rien d'autre."
+
+[[bin]]
+name = "bootsel-helper"
+path = "src/main.rs"
+
+[dependencies]
+bootsel-core = { workspace = true }
+serde_json = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+    "Win32_System_WindowsProgramming",
+] }

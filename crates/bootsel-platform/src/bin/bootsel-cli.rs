@@ -31,6 +31,9 @@ fn main() {
         // Ce binaire est toujours en lecture seule, quelles que soient les
         // options : c'est un outil de diagnostic, pas un selecteur.
         read_only: true,
+        // `--elevate` demande une invite UAC pour lire les entrees UEFI. Sans
+        // cette option, l'outil reste strictement non privilegie.
+        elevate: args.iter().any(|a| a == "--elevate"),
     };
 
     let backend = match create_backend(&options) {
@@ -72,8 +75,10 @@ fn main() {
             println!("Entrees UEFI : non lues.");
             println!();
             println!("Sous Windows, lire les variables de demarrage du firmware exige des");
-            println!("privileges administrateur — y compris en lecture seule. Relancez cet");
-            println!("outil depuis un terminal administrateur pour voir les entrees UEFI.");
+            println!("privileges administrateur — y compris en lecture seule.");
+            println!();
+            println!("Relancez avec --elevate pour obtenir une invite d elevation, ou");
+            println!("depuis un terminal administrateur.");
             println!();
             println!("Aucune modification n'a ete effectuee.");
         }
@@ -189,6 +194,7 @@ fn print_help() {
     println!("Usage : bootsel-cli [--mock-boot <scenario>]");
     println!();
     println!("  --mock-boot <scenario>  Utilise un firmware simule au lieu du materiel reel.");
+    println!("  --elevate               Demande une elevation pour lire les entrees UEFI.");
     println!("  --help, -h              Affiche cette aide.");
     println!();
     println!("Cet outil n'ecrit jamais : ni firmware, ni disque, ni partition.");

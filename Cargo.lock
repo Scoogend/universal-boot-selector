@@ -37,11 +37,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "bootsel-helper"
+version = "0.1.0"
+dependencies = [
+ "bootsel-core",
+ "serde_json",
+ "windows",
+]
+
+[[package]]
 name = "bootsel-platform"
 version = "0.1.0"
 dependencies = [
  "bootsel-core",
  "serde",
+ "serde_json",
  "tracing",
  "windows",
  "wmi",

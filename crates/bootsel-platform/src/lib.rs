@@ -12,6 +12,8 @@
 #![deny(clippy::undocumented_unsafe_blocks)]
 
 #[cfg(windows)]
+pub mod elevate;
+#[cfg(windows)]
 pub mod windows;
 
 use bootsel_core::backend::{BackendError, BootBackend};
@@ -24,6 +26,13 @@ pub struct BackendOptions {
     pub mock_scenario: Option<String>,
     /// Interdit toute ecriture, quelle que soit la plateforme (`--dry-run`).
     pub read_only: bool,
+    /// Autorise a demander une elevation si le firmware n'est pas lisible
+    /// autrement. Sous Windows, cela declenche une invite UAC.
+    ///
+    /// A `false`, l'application reste strictement non privilegiee : elle
+    /// affiche l'inventaire materiel et signale que les entrees UEFI n'ont pas
+    /// ete lues.
+    pub elevate: bool,
 }
 
 /// Construit le backend adapte a la plateforme et aux options.
@@ -34,10 +43,33 @@ pub fn create_backend(options: &BackendOptions) -> Result<Box<dyn BootBackend>, 
 
     #[cfg(windows)]
     {
+        // Sans elevation, on livre le backend en lecture locale : l'inventaire
+        // materiel reste disponible, les entrees UEFI non.
+        if !options.elevate {
+            let backend = if options.read_only {
+                windows::WindowsBootBackend::read_only()
+            } else {
+                windows::WindowsBootBackend::new()
+            };
+            return Ok(Box::new(backend));
+        }
+
+        // Le processus est deja eleve : inutile de lancer le helper, la
+        // lecture directe fonctionne et n'ouvre aucun canal supplementaire.
+        if windows::firmware::can_read_firmware() {
+            let backend = if options.read_only {
+                windows::WindowsBootBackend::read_only()
+            } else {
+                windows::WindowsBootBackend::new()
+            };
+            return Ok(Box::new(backend));
+        }
+
+        let channel = elevate::launch_helper()?;
         let backend = if options.read_only {
-            windows::WindowsBootBackend::read_only()
+            windows::elevated::ElevatedWindowsBackend::read_only(channel)
         } else {
-            windows::WindowsBootBackend::new()
+            windows::elevated::ElevatedWindowsBackend::new(channel)
         };
         return Ok(Box::new(backend));
     }
@@ -91,6 +123,7 @@ mod tests {
         let backend = create_backend(&BackendOptions {
             mock_scenario: None,
             read_only: true,
+            elevate: false,
         })
         .expect("backend natif");
         assert!(backend.is_read_only());
@@ -103,6 +136,7 @@ mod tests {
             let backend = create_backend(&BackendOptions {
                 mock_scenario: Some(name.to_string()),
                 read_only: false,
+                elevate: false,
             })
             .unwrap_or_else(|e| panic!("{name} : {e}"));
             assert_eq!(backend.name(), "mock");
@@ -115,6 +149,7 @@ mod tests {
         let err = create_backend(&BackendOptions {
             mock_scenario: Some("inexistant".into()),
             read_only: false,
+            elevate: false,
         })
         .unwrap_err();
         assert!(matches!(err, BackendError::Unsupported(_)));

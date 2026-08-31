@@ -10,6 +10,12 @@
 //! entree ajoutee a `PRIVILEGED_ALLOWLIST` doit etre justifiee dans
 //! `SECURITY.md`.
 //!
+//! `arm_reboot` figure dans la liste surveillee a la suite d'un incident : un
+//! test appelait `reboot()` sur un backend reel dans une session elevee, et a
+//! fait redemarrer la machine de developpement pendant `cargo test`. Le
+//! redemarrage exige desormais un armement explicite, et ce test garantit que
+//! seul le point d'entree de l'application peut le demander.
+//!
 //! Seuls les repertoires `src/` sont analyses : c'est le code livre. Les
 //! repertoires `tests/` en sont exclus, sans quoi ce fichier se signalerait
 //! lui-meme.
@@ -119,6 +125,7 @@ const FORBIDDEN_EVERYWHERE_EXACT: &[(&str, &str)] = &[
 const PRIVILEGED: &[(&str, &str)] = &[
     ("SetFirmwareEnvironmentVariable", "ecriture de variable UEFI"),
     ("ExitWindowsEx", "redemarrage Windows"),
+    ("arm_reboot", "armement du redemarrage"),
     ("InitiateSystemShutdown", "redemarrage Windows"),
     ("AdjustTokenPrivileges", "elevation de privileges"),
     ("Command::new", "lancement d'un processus"),
@@ -157,7 +164,7 @@ fn test_no_destructive_symbols() {
 
     for path in shipped_sources() {
         let rel = relative(&path);
-        let content = fs::read_to_string(&path).expect("source lisible");
+        let content = shipped_code(&fs::read_to_string(&path).expect("source lisible"));
 
         for (needle, why) in FORBIDDEN_EVERYWHERE {
             if let Some(line) = find_line(&content, needle) {
@@ -188,7 +195,7 @@ fn test_privileged_operations_are_confined() {
         if is_allowed(&rel) {
             continue;
         }
-        let content = fs::read_to_string(&path).expect("source lisible");
+        let content = shipped_code(&fs::read_to_string(&path).expect("source lisible"));
 
         for (needle, why) in PRIVILEGED {
             if let Some(line) = find_line(&content, needle) {
@@ -219,7 +226,7 @@ fn test_core_crate_has_no_system_access() {
     let mut violations = Vec::new();
     for path in &files {
         let rel = relative(path);
-        let content = fs::read_to_string(path).expect("source lisible");
+        let content = shipped_code(&fs::read_to_string(path).expect("source lisible"));
 
         for needle in [
             "std::fs",
@@ -265,7 +272,7 @@ fn test_boot_order_is_never_written() {
 
     for path in shipped_sources() {
         let rel = relative(&path);
-        let content = fs::read_to_string(&path).expect("source lisible");
+        let content = shipped_code(&fs::read_to_string(&path).expect("source lisible"));
 
         for needle in [
             "set_variable(VAR_BOOT_ORDER",
@@ -286,6 +293,57 @@ fn test_boot_order_is_never_written() {
         "ecriture de BootOrder detectee — interdiction absolue du projet :\n  {}",
         violations.join("\n  ")
     );
+}
+
+/// Retire les modules `#[cfg(test)]` du source analyse.
+///
+/// Seul le code **livre** est audite. Le code de test n'entre pas dans les
+/// binaires de production, et l'y inclure produit des faux positifs : les
+/// tests de ce projet citent nommement les operations interdites pour verifier
+/// qu'elles sont bien rejetees.
+///
+/// Les lignes retirees sont remplacees par des lignes vides, ce qui preserve
+/// la numerotation affichee dans les messages d'erreur.
+fn shipped_code(content: &str) -> String {
+    let mut out = Vec::new();
+    let mut pending_cfg_test = false;
+    let mut depth = 0usize;
+
+    for line in content.lines() {
+        if depth > 0 {
+            depth = depth
+                .saturating_add(line.matches('{').count())
+                .saturating_sub(line.matches('}').count());
+            out.push(String::new());
+            continue;
+        }
+
+        if line.trim_start().starts_with("#[cfg(test)]") {
+            pending_cfg_test = true;
+            out.push(String::new());
+            continue;
+        }
+
+        if pending_cfg_test && line.contains("mod ") && line.contains('{') {
+            depth = line.matches('{').count() - line.matches('}').count();
+            pending_cfg_test = false;
+            out.push(String::new());
+            continue;
+        }
+
+        // Un attribut `#[cfg(test)]` suivi d'autre chose qu'un module : la
+        // ligne suivante seule est ignoree.
+        if pending_cfg_test {
+            pending_cfg_test = false;
+            out.push(String::new());
+            continue;
+        }
+
+        out.push(line.to_string());
+    }
+
+    out.join("
+")
 }
 
 /// Renvoie le numero de la premiere ligne contenant le motif, hors commentaires.
@@ -330,6 +388,49 @@ mod meta {
             find_line("let x = diskpart; // explication", "diskpart"),
             Some(1)
         );
+    }
+
+    #[test]
+    fn test_modules_are_excluded_from_the_audit() {
+        let source = "fn ship() {}
+#[cfg(test)]
+mod tests {
+    let x = \"diskpart\";
+}
+fn also_ship() {}";
+        let shipped = shipped_code(source);
+
+        assert!(shipped.contains("fn ship()"));
+        assert!(shipped.contains("fn also_ship()"));
+        assert!(
+            !shipped.contains("diskpart"),
+            "le corps du module de test doit disparaitre"
+        );
+        // La numerotation est preservee pour que les messages restent justes.
+        assert_eq!(shipped.lines().count(), source.lines().count());
+    }
+
+    #[test]
+    fn nested_braces_inside_a_test_module_do_not_end_it_early() {
+        let source = "#[cfg(test)]
+mod tests {
+    fn a() {
+        let x = 1;
+    }
+    let y = \"mkfs\";
+}
+fn shipped() {}";
+        let shipped = shipped_code(source);
+        assert!(!shipped.contains("mkfs"));
+        assert!(shipped.contains("fn shipped()"));
+    }
+
+    #[test]
+    fn shipped_code_outside_test_modules_is_still_audited() {
+        let source = "fn danger() {
+    run(\"diskpart\");
+}";
+        assert!(shipped_code(source).contains("diskpart"));
     }
 
     #[test]

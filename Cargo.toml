@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/bootsel-core",
     "crates/bootsel-platform",
+    "crates/bootsel-helper",
 ]
 
 [workspace.package]
