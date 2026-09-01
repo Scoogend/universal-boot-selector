@@ -8,3 +8,6 @@ Thumbs.db
 
 # Rien de sensible ne doit jamais entrer ici de toute facon :
 # l'application ne manipule aucun secret.
+
+# Paquets livrables : produits par la CI, publies dans les Releases.
+livraison/
