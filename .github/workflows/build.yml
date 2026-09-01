@@ -1,10 +1,14 @@
 name: Build
 
-# Construit et teste sur Windows et Linux. Sur un tag `v*`, publie les
-# paquets dans une Release.
+# Construit, teste, et produit des paquets installables sans compilation :
 #
-# Aucune etape de ce workflow ne touche au firmware : la machine de CI
-# n'expose pas de variables UEFI, et la suite de tests s'execute
+#   Windows  installateur .exe  +  archive portable
+#   Linux    .deb  +  .AppImage  +  archive portable
+#
+# Sur un tag `v*`, tout est publie dans une Release.
+#
+# Aucune etape de ce workflow ne touche a un firmware : les machines de CI
+# n'exposent pas de variables UEFI, et la suite de tests s'execute
 # integralement contre le firmware simule.
 
 on:
@@ -17,6 +21,9 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  # Le bundler Tauri doit embarquer le helper a cote de l'executable :
+  # l'application le cherche la, et nulle part ailleurs.
+  TAURI_BUNDLE_CONFIG: tauri.bundle.json
 
 jobs:
   # ---------------------------------------------------------------------
@@ -24,7 +31,7 @@ jobs:
   # ---------------------------------------------------------------------
   controles:
     name: Tests et controles de securite
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
 
@@ -36,14 +43,14 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt, clippy
+          components: clippy
 
       - uses: Swatinem/rust-cache@v2
 
       - name: Suite de tests complete
         run: cargo test --workspace --features bootsel-platform/mock
 
-      # `testdata` expose le firmware simule aux tests d integration. Sans
+      # `testdata` expose le firmware simule aux tests d'integration. Sans
       # elle, ces deux suites ne compilent pas : le backend mock est derriere
       # cette fonctionnalite pour ne jamais entrer dans un binaire de release.
       - name: Controles de securite nommes
@@ -55,10 +62,10 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
 
   # ---------------------------------------------------------------------
-  # Windows
+  # Windows : installateur + archive portable
   # ---------------------------------------------------------------------
   windows:
-    name: Paquet Windows
+    name: Paquets Windows
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -71,28 +78,74 @@ jobs:
       - name: Compilation
         run: cargo build --release --workspace --features bootsel-platform/mock
 
-      - name: Assemblage du paquet
+      # Le bundler attend des noms suffixes par la cible ; il retire le
+      # suffixe a l'installation, ce qui place le helper juste a cote de
+      # l'executable, la ou l'application le cherche.
+      - name: Preparation des binaires embarques
         shell: bash
         run: |
-          mkdir -p paquet/UniversalBootSelector-Windows
+          mkdir -p crates/bootsel-ui/binaries
+          cp target/release/bootsel-helper.exe \
+             crates/bootsel-ui/binaries/bootsel-helper-x86_64-pc-windows-msvc.exe
+          cp target/release/bootsel-cli.exe \
+             crates/bootsel-ui/binaries/bootsel-cli-x86_64-pc-windows-msvc.exe
+
+      - name: Installation du bundler Tauri
+        run: cargo install tauri-cli --version "^2.0" --locked
+
+      - name: Construction de l'installateur
+        working-directory: crates/bootsel-ui
+        run: cargo tauri build --bundles nsis --config tauri.bundle.json
+
+      # Verification que le helper est reellement embarque : sans lui a cote
+      # de l'executable, l'application ne peut pas lire le firmware.
+      - name: Verification de l'installateur
+        shell: bash
+        run: |
+          INSTALLER=$(find target/release/bundle -name '*-setup.exe' | head -1)
+          echo "installateur : $INSTALLER"
+          CONTENU=$(7z l "$INSTALLER")
+          echo "$CONTENU" | grep -iE 'bootsel' || true
+          for attendu in bootsel.exe bootsel-helper.exe bootsel-cli.exe; do
+            echo "$CONTENU" | grep -qi "$attendu"               || { echo "MANQUANT dans l'installateur : $attendu"; exit 1; }
+          done
+          echo "les trois binaires sont bien embarques"
+
+      - name: Assemblage
+        shell: bash
+        run: |
+          mkdir -p sortie/portable/UniversalBootSelector-Windows sortie/installateur
+
           cp target/release/bootsel.exe \
              target/release/bootsel-helper.exe \
              target/release/bootsel-cli.exe \
-             paquet/UniversalBootSelector-Windows/
-          cp docs/LISEZ-MOI-windows.txt \
-             paquet/UniversalBootSelector-Windows/LISEZ-MOI.txt 2>/dev/null || true
+             docs/LISEZ-MOI-windows.txt \
+             sortie/portable/UniversalBootSelector-Windows/
+          mv sortie/portable/UniversalBootSelector-Windows/LISEZ-MOI-windows.txt \
+             sortie/portable/UniversalBootSelector-Windows/LISEZ-MOI.txt
+
+          find target/release/bundle -name '*.exe' -exec cp {} sortie/installateur/ \;
+          ls -la sortie/installateur/
 
       - uses: actions/upload-artifact@v4
         with:
-          name: UniversalBootSelector-Windows
-          path: paquet/UniversalBootSelector-Windows/
+          name: windows-portable
+          path: sortie/portable/
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-installateur
+          path: sortie/installateur/
           if-no-files-found: error
 
   # ---------------------------------------------------------------------
-  # Linux (Debian et derivees)
+  # Linux : .deb, .AppImage, et archive portable
   # ---------------------------------------------------------------------
   linux:
-    name: Paquet Linux
+    name: Paquets Linux
+    # Volontairement ancien : un binaire compile sur une glibc ancienne
+    # fonctionne sur les distributions plus recentes, l'inverse est faux.
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -101,7 +154,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev \
-            librsvg2-dev patchelf libgtk-3-dev
+            librsvg2-dev patchelf libgtk-3-dev libfuse2 file desktop-file-utils
 
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
@@ -112,21 +165,67 @@ jobs:
       - name: Compilation
         run: cargo build --release --workspace --features bootsel-platform/mock
 
-      - name: Assemblage du paquet
+      - name: Preparation des binaires embarques
         run: |
-          mkdir -p paquet/UniversalBootSelector-Linux
+          mkdir -p crates/bootsel-ui/binaries
+          cp target/release/bootsel-helper \
+             crates/bootsel-ui/binaries/bootsel-helper-x86_64-unknown-linux-gnu
+          cp target/release/bootsel-cli \
+             crates/bootsel-ui/binaries/bootsel-cli-x86_64-unknown-linux-gnu
+
+      - name: Installation du bundler Tauri
+        run: cargo install tauri-cli --version "^2.0" --locked
+
+      - name: Construction du .deb et de l'AppImage
+        working-directory: crates/bootsel-ui
+        run: cargo tauri build --bundles deb,appimage --config tauri.bundle.json
+
+      - name: Assemblage
+        run: |
+          mkdir -p sortie/paquets sortie/portable/UniversalBootSelector-Linux
+
           cp target/release/bootsel \
              target/release/bootsel-helper \
              target/release/bootsel-cli \
-             paquet/UniversalBootSelector-Linux/ 2>/dev/null || true
+             sortie/portable/UniversalBootSelector-Linux/
           cp docs/LISEZ-MOI-linux.txt \
-             paquet/UniversalBootSelector-Linux/LISEZ-MOI.txt 2>/dev/null || true
-          ls -la paquet/UniversalBootSelector-Linux/
+             sortie/portable/UniversalBootSelector-Linux/LISEZ-MOI.txt
+
+          # Les noms produits par le bundler contiennent des espaces et le
+          # numero de version ; on les normalise pour qu'ils soient simples
+          # a telecharger et a taper.
+          find target/release/bundle -name '*.deb' -print0 | while IFS= read -r -d '' f; do
+            cp "$f" "sortie/paquets/universal-boot-selector_amd64.deb"
+          done
+          find target/release/bundle -name '*.AppImage' -print0 | while IFS= read -r -d '' f; do
+            cp "$f" "sortie/paquets/UniversalBootSelector-x86_64.AppImage"
+          done
+          chmod +x sortie/paquets/*.AppImage 2>/dev/null || true
+          ls -la sortie/paquets/
+
+      - name: Verification du .deb
+        run: |
+          echo "--- dependances declarees ---"
+          dpkg-deb -f sortie/paquets/universal-boot-selector_amd64.deb Depends
+          echo "--- contenu ---"
+          dpkg-deb -c sortie/paquets/universal-boot-selector_amd64.deb | grep -E 'bootsel' || true
+          # Sans le helper a cote de l'executable, l'application ne peut pas
+          # ecrire BootNext. On refuse de publier un paquet incomplet.
+          for attendu in bootsel bootsel-helper bootsel-cli; do
+            dpkg-deb -c sortie/paquets/universal-boot-selector_amd64.deb               | grep -qE "/$attendu\$"               || { echo "MANQUANT dans le .deb : $attendu"; exit 1; }
+          done
+          echo "les trois binaires sont bien dans le .deb"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: UniversalBootSelector-Linux
-          path: paquet/UniversalBootSelector-Linux/
+          name: linux-paquets
+          path: sortie/paquets/
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-portable
+          path: sortie/portable/
           if-no-files-found: error
 
   # ---------------------------------------------------------------------
@@ -136,23 +235,53 @@ jobs:
     name: Release
     needs: [controles, windows, linux]
     if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     permissions:
       contents: write
     steps:
       - uses: actions/download-artifact@v4
         with:
-          path: paquets
+          path: telechargements
 
-      - name: Archives
+      - name: Archives et fichiers a publier
         run: |
-          cd paquets
-          for dossier in */; do
-            nom="${dossier%/}"
-            zip -r "../${nom}.zip" "$dossier"
-          done
+          mkdir -p publication
+
+          # Paquets Linux, deja prets a l'emploi.
+          cp telechargements/linux-paquets/* publication/
+
+          # Installateur Windows.
+          cp telechargements/windows-installateur/* publication/
+
+          # Archives portables, pour qui prefere ne rien installer.
+          (cd telechargements/windows-portable && zip -r ../../publication/UniversalBootSelector-Windows-portable.zip .)
+          (cd telechargements/linux-portable && chmod +x UniversalBootSelector-Linux/* && zip -r ../../publication/UniversalBootSelector-Linux-portable.zip .)
+
+          ls -la publication/
 
       - uses: softprops/action-gh-release@v2
         with:
-          files: "*.zip"
+          files: publication/*
           generate_release_notes: true
+          body: |
+            ## Telechargements
+
+            | Vous etes sur | Prenez | Puis |
+            |---|---|---|
+            | **Windows** | l'installateur `.exe` | double-clic, suivez l'assistant |
+            | **Windows**, sans installer | `...-Windows-portable.zip` | dezippez, lancez `bootsel.exe` |
+            | **Debian / Ubuntu** | `universal-boot-selector_amd64.deb` | `sudo apt install ./universal-boot-selector_amd64.deb` |
+            | **Autre Linux** | `...-x86_64.AppImage` | `chmod +x` puis lancez-le |
+
+            Le `.deb` installe ses dependances tout seul.
+            L'AppImage n'a besoin de rien : tout est dedans.
+
+            ## Avant de vous en servir
+
+            Commencez par `bootsel-cli` : il est en **lecture seule** et ne
+            contient aucun code d'ecriture. Il vous montre ce que
+            l'application detecte, sans rien modifier.
+
+            L'application n'ecrit qu'une seule chose : la variable UEFI
+            `BootNext`, longue de deux octets, et uniquement quand vous
+            confirmez. L'ordre de demarrage permanent n'est jamais touche.

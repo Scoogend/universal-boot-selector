@@ -13,3 +13,6 @@ Thumbs.db
 
 # Paquets livrables : produits par la CI, publies dans les Releases.
 livraison/
+
+# Binaires embarques par le bundler : produits a la compilation.
+crates/bootsel-ui/binaries/

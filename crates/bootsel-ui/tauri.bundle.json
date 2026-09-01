@@ -1,0 +1,16 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "externalBin": [
+      "binaries/bootsel-helper",
+      "binaries/bootsel-cli"
+    ],
+    "linux": {
+      "deb": {
+        "depends": ["libwebkit2gtk-4.1-0", "libgtk-3-0"]
+      }
+    },
+    "longDescription": "Choisit sur quel systeme le PC demarrera la prochaine fois, puis redemarre dessus. La seule chose ecrite est la variable UEFI BootNext, longue de deux octets, et uniquement sur confirmation. L ordre de demarrage permanent n est jamais modifie.",
+    "shortDescription": "Selecteur de demarrage UEFI, sans toucher a l ordre permanent"
+  }
+}
