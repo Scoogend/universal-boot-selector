@@ -28,20 +28,13 @@ use std::time::Duration;
 /// Verrou d'armement. Voir la documentation du module.
 static REBOOT_ARMED: AtomicBool = AtomicBool::new(false);
 
-/// Delai au-dela duquel on considere que la commande ne repondra pas.
-#[cfg(not(test))]
-const TIMEOUT: Duration = Duration::from_secs(5);
-
-/// Temps laisse au systeme pour s'arreter avant de conclure a un echec.
-///
-/// Genereux : un arret propre demonte les volumes et arrete les services.
-#[cfg(not(test))]
-const DELAI_CONSTAT: Duration = Duration::from_secs(12);
-
 /// Autorise le redemarrage pour la duree du processus.
 ///
 /// **Appele uniquement par le point d'entree de l'application reelle**, jamais
-/// par une bibliotheque ni par un test.
+/// par une bibliotheque ni par un test. Ce verrou existe a la suite d'un
+/// incident : un test appelait la fonction de redemarrage en croyant qu'elle
+/// ne faisait rien, et a redemarre la machine de developpement pendant
+/// `cargo test`.
 pub fn arm_reboot() {
     REBOOT_ARMED.store(true, Ordering::SeqCst);
 }
@@ -75,15 +68,33 @@ pub fn reboot() -> Result<(), BackendError> {
     }
 }
 
+/// Delai accorde a une commande qui n'attend aucune saisie.
+#[cfg(not(test))]
+const DELAI_COMMANDE: Duration = Duration::from_secs(5);
+
+/// Delai accorde a une commande qui attend une **saisie humaine**.
+///
+/// `pkexec` affiche une demande de mot de passe. Une version precedente lui
+/// laissait cinq secondes : la fenetre etait tuee avant que l'utilisateur ait
+/// pu repondre, et la seule methode qui aurait fonctionne echouait ainsi
+/// systematiquement.
+#[cfg(not(test))]
+const DELAI_SAISIE: Duration = Duration::from_secs(180);
+
+/// Temps laisse au systeme pour s'arreter avant de conclure a un echec.
+#[cfg(not(test))]
+const DELAI_CONSTAT: Duration = Duration::from_secs(8);
+
 #[cfg(not(test))]
 fn do_reboot() -> Result<(), BackendError> {
     let mut refus = Vec::new();
 
     for methode in methodes_de_redemarrage() {
         match tenter(&methode) {
-            // Une commande acceptee ne prouve rien : sous SysVinit, elogind
-            // accepte l'appel D-Bus et ne redemarre pas. On attend donc de
-            // *constater* l'arret plutot que de le supposer.
+            // Une commande acceptee ne prouve rien : `shutdown` sort avec le
+            // code 0 alors meme qu'il refuse faute de droits, et elogind
+            // accepte l'appel D-Bus sans agir. On attend donc de *constater*
+            // l'arret plutot que de le supposer.
             Ok(()) => {
                 if machine_part_bien() {
                     return Ok(());
@@ -102,13 +113,6 @@ fn do_reboot() -> Result<(), BackendError> {
 
 /// Attend de voir si la machine s'arrete reellement.
 ///
-/// # Pourquoi ce controle existe
-///
-/// Constate sur MX Linux : `dbus-send` renvoie un succes, elogind accepte la
-/// demande, et **rien ne se passe**. L'application affichait alors
-/// « Redemarrage en cours... » indefiniment, alors que la selection etait
-/// faite depuis longtemps et qu'il suffisait de redemarrer a la main.
-///
 /// Un redemarrage reel tue ce processus bien avant la fin de l'attente : si
 /// cette fonction rend la main, c'est que la methode n'a pas fonctionne.
 #[cfg(not(test))]
@@ -117,43 +121,95 @@ fn machine_part_bien() -> bool {
     while std::time::Instant::now() < echeance {
         std::thread::sleep(Duration::from_millis(200));
     }
-    // Toujours la : la machine n'est pas partie.
     false
+}
+
+/// Vrai si le processus tourne deja avec les droits root.
+#[cfg(not(test))]
+fn est_root() -> bool {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::metadata("/proc/self")
+        .map(|m| m.uid() == 0)
+        .unwrap_or(false)
+}
+
+/// Prepare une commande systeme en **assainissant l'environnement**.
+///
+/// # Pourquoi c'est indispensable depuis une AppImage
+///
+/// Une AppImage place ses propres bibliotheques en tete de `LD_LIBRARY_PATH`.
+/// Un programme du systeme lance depuis ce contexte charge alors ces
+/// bibliotheques-la plutot que celles de la machine, et echoue :
+///
+/// ```text
+/// /usr/bin/dbus-send: /tmp/.mount_XXXX/usr/lib/libdbus-1.so.3:
+///   version `LIBDBUS_PRIVATE_1.16.2' not found
+/// ```
+///
+/// AppImage conserve les valeurs d'origine sous `APPIMAGE_ORIGINAL_*`. On les
+/// restaure, ou on supprime la variable a defaut.
+#[cfg(not(test))]
+fn commande_systeme(programme: &str) -> std::process::Command {
+    let mut commande = std::process::Command::new(programme);
+
+    for nom in [
+        "LD_LIBRARY_PATH",
+        "LD_PRELOAD",
+        "PYTHONPATH",
+        "PERLLIB",
+        "XDG_DATA_DIRS",
+        "GSETTINGS_SCHEMA_DIR",
+        "QT_PLUGIN_PATH",
+        "GST_PLUGIN_SYSTEM_PATH",
+        "GST_PLUGIN_SYSTEM_PATH_1_0",
+        "GTK_PATH",
+    ] {
+        match std::env::var_os(format!("APPIMAGE_ORIGINAL_{nom}")) {
+            Some(origine) => {
+                commande.env(nom, origine);
+            }
+            None => {
+                commande.env_remove(nom);
+            }
+        }
+    }
+
+    commande
 }
 
 /// Methodes de redemarrage, de la plus propre a la plus rustique.
 ///
-/// # Trois hypotheses fausses, corrigees a l'usage
+/// # Quatre hypotheses fausses, corrigees a l'usage
 ///
-/// 1. **`systemctl` n'est pas toujours utilisable.** MX Linux tourne sous
-///    SysVinit ; la commande refuse net. Sa presence est donc verifiee.
-///
-/// 2. **`loginctl` non plus.** Sur cette meme machine, `/usr/bin/loginctl`
-///    appartient au paquet *systemd* et refuse pour la meme raison — alors
-///    qu'`elogind` tourne bel et bien et accepterait la demande. Passer par
-///    **D-Bus** contourne le probleme : `org.freedesktop.login1` est
-///    l'interface commune a systemd-logind et a elogind.
-///
-/// 3. **Le `PATH` d'une application graphique ne contient pas `/sbin`.**
-///    `Command::new("shutdown")` echouait avec « fichier introuvable » alors
-///    que le programme existait. Tous les chemins sont donc absolus.
+/// 1. `systemctl` n'est pas toujours utilisable : MX Linux tourne sous
+///    SysVinit. Sa presence est verifiee, jamais supposee.
+/// 2. `loginctl` non plus : sur cette meme machine il appartient au paquet
+///    *systemd*. On passe par D-Bus, interface commune a systemd-logind et a
+///    elogind.
+/// 3. Le `PATH` d'une application graphique ne contient pas `/sbin` : tous les
+///    chemins sont absolus.
+/// 4. `shutdown` et `reboot` **echouent en silence** sans droits root — ils
+///    affichent « you must be root » mais sortent avec le code 0. Les essayer
+///    sans etre root ne fait donc que perdre du temps : ils sont ecartes.
 #[cfg(not(test))]
 fn methodes_de_redemarrage() -> Vec<Methode> {
     let mut methodes = Vec::new();
+    let root = est_root();
 
-    // 1. systemd, uniquement s'il est reellement PID 1.
+    // 1. systemd, uniquement s'il est reellement PID 1. Fonctionne sans
+    //    privilege grace a polkit.
     if std::path::Path::new("/run/systemd/system").is_dir() {
         if let Some(programme) = premier_existant(&["/usr/bin/systemctl", "/bin/systemctl"]) {
             methodes.push(Methode {
                 nom: "systemctl",
                 programme,
                 arguments: &["reboot"],
+                attente: DELAI_COMMANDE,
             });
         }
     }
 
-    // 2. D-Bus. Une seule interface pour systemd-logind et elogind, et elle
-    //    fonctionne sans privilege pour l'utilisateur de la session locale.
+    // 2. D-Bus : systemd-logind comme elogind.
     if let Some(programme) = premier_existant(&["/usr/bin/dbus-send", "/bin/dbus-send"]) {
         methodes.push(Methode {
             nom: "dbus-send",
@@ -166,30 +222,25 @@ fn methodes_de_redemarrage() -> Vec<Methode> {
                 "org.freedesktop.login1.Manager.Reboot",
                 "boolean:true",
             ],
+            attente: DELAI_COMMANDE,
         });
     }
 
-    // 3. SysVinit et OpenRC. Arret propre, mais demande les droits root.
-    if let Some(programme) = premier_existant(&["/sbin/shutdown", "/usr/sbin/shutdown"]) {
-        methodes.push(Methode {
-            nom: "shutdown",
-            programme,
-            arguments: &["-r", "now"],
-        });
+    // 3. Arret direct, seulement si on a deja les droits : sinon la commande
+    //    refuse tout en pretendant reussir.
+    if root {
+        if let Some(programme) = premier_existant(&["/sbin/shutdown", "/usr/sbin/shutdown"]) {
+            methodes.push(Methode {
+                nom: "shutdown",
+                programme,
+                arguments: &["-r", "now"],
+                attente: DELAI_COMMANDE,
+            });
+        }
     }
 
-    if let Some(programme) = premier_existant(&["/sbin/reboot", "/usr/sbin/reboot"]) {
-        methodes.push(Methode {
-            nom: "reboot",
-            programme,
-            arguments: &[],
-        });
-    }
-
-    // 4. Dernier recours : le meme arret propre, mais avec les droits root
-    //    obtenus par pkexec. Demande une authentification, d'ou sa place en
-    //    fin de liste — on ne derange l'utilisateur que si rien d'autre n'a
-    //    fonctionne.
+    // 4. Le meme arret propre, avec les droits obtenus par pkexec. Demande une
+    //    authentification, d'ou sa place en fin de liste et son delai long.
     if let (Some(pkexec), Some(_)) = (
         premier_existant(&["/usr/bin/pkexec", "/bin/pkexec"]),
         premier_existant(&["/sbin/shutdown", "/usr/sbin/shutdown"]),
@@ -198,6 +249,7 @@ fn methodes_de_redemarrage() -> Vec<Methode> {
             nom: "pkexec shutdown",
             programme: pkexec,
             arguments: &["/sbin/shutdown", "-r", "now"],
+            attente: DELAI_SAISIE,
         });
     }
 
@@ -211,9 +263,10 @@ struct Methode {
     nom: &'static str,
     programme: &'static str,
     arguments: &'static [&'static str],
+    attente: Duration,
 }
 
-/// Premier chemin absolu existant et executable de la liste.
+/// Premier chemin absolu existant de la liste.
 #[cfg(not(test))]
 fn premier_existant(chemins: &[&'static str]) -> Option<&'static str> {
     chemins
@@ -222,12 +275,12 @@ fn premier_existant(chemins: &[&'static str]) -> Option<&'static str> {
         .copied()
 }
 
-/// Lance une commande de redemarrage et attend brievement son verdict.
+/// Lance une commande de redemarrage et attend son verdict.
 #[cfg(not(test))]
 fn tenter(methode: &Methode) -> Result<(), String> {
-    use std::process::{Command, Stdio};
+    use std::process::Stdio;
 
-    let mut child = Command::new(methode.programme)
+    let mut child = commande_systeme(methode.programme)
         .args(methode.arguments)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -235,7 +288,7 @@ fn tenter(methode: &Methode) -> Result<(), String> {
         .spawn()
         .map_err(|e| format!("{e}"))?;
 
-    let deadline = std::time::Instant::now() + TIMEOUT;
+    let echeance = std::time::Instant::now() + methode.attente;
     loop {
         match child.try_wait() {
             Ok(Some(status)) if status.success() => return Ok(()),
@@ -243,15 +296,13 @@ fn tenter(methode: &Methode) -> Result<(), String> {
                 let mut details = String::new();
                 if let Some(mut err) = child.stderr.take() {
                     use std::io::Read;
-                    let mut buffer = String::new();
-                    let _ = err.read_to_string(&mut buffer);
-                    details = buffer.lines().next().unwrap_or("").to_string();
+                    let mut tampon = String::new();
+                    let _ = err.read_to_string(&mut tampon);
+                    details = tampon.lines().next().unwrap_or("").to_string();
                 }
                 return Err(format!("code {} {details}", status.code().unwrap_or(-1)));
             }
-            // Une commande qui ne rend jamais la main est bloquee, pas en
-            // train de redemarrer : on ne la prend plus pour un succes.
-            Ok(None) if std::time::Instant::now() >= deadline => {
+            Ok(None) if std::time::Instant::now() >= echeance => {
                 let _ = child.kill();
                 return Err("aucune reponse".to_string());
             }
@@ -343,12 +394,48 @@ mod tests") {
     }
 
     #[test]
+    fn an_interactive_command_gets_time_for_a_human_to_answer() {
+        // Une version precedente laissait cinq secondes a pkexec : la demande
+        // de mot de passe etait tuee avant que l utilisateur puisse repondre,
+        // et la seule methode qui aurait fonctionne echouait toujours.
+        let code = shipped_source();
+        assert!(code.contains("DELAI_SAISIE"));
+        assert!(
+            code.contains("attente: DELAI_SAISIE"),
+            "pkexec doit disposer du delai long"
+        );
+    }
+
+    #[test]
+    fn spawned_programs_do_not_inherit_the_appimage_libraries() {
+        // Depuis une AppImage, LD_LIBRARY_PATH pointe vers ses propres
+        // bibliotheques et fait echouer les programmes du systeme.
+        let code = shipped_source();
+        assert!(code.contains("APPIMAGE_ORIGINAL_"));
+        assert!(code.contains("LD_LIBRARY_PATH"));
+        assert!(code.contains("env_remove"));
+        assert!(
+            !code.contains("std::process::Command::new(methode.programme)"),
+            "toute commande systeme doit passer par commande_systeme"
+        );
+    }
+
+    #[test]
+    fn commands_that_need_root_are_skipped_when_unprivileged() {
+        // `shutdown` affiche « you must be root » mais sort avec le code 0 :
+        // l essayer sans droits ne fait que perdre le delai de constat.
+        let code = shipped_source();
+        assert!(code.contains("fn est_root()"));
+        assert!(code.contains("if root {"));
+    }
+
+    #[test]
     fn every_program_is_an_absolute_path() {
         // Le PATH d'une application graphique ne contient pas /sbin :
         // `Command::new("shutdown")` echouait avec « fichier introuvable »
         // alors que le programme existait.
         let code = shipped_source();
-        for chemin in ["/sbin/shutdown", "/sbin/reboot", "/usr/bin/dbus-send"] {
+        for chemin in ["/sbin/shutdown", "/usr/sbin/shutdown", "/usr/bin/dbus-send"] {
             assert!(code.contains(chemin), "chemin absolu attendu : {chemin}");
         }
         // Les commentaires citent nommement la forme fautive pour expliquer
@@ -371,6 +458,7 @@ mod tests") {
         // Arguments separes et constants : rien n est concatene, donc rien
         // n est injectable.
         assert!(code.contains(".args(methode.arguments)"));
+        assert!(code.contains("commande_systeme(methode.programme)"));
         for forbidden in ["sh -c", "\"bash\"", "format!(\"systemctl"] {
             assert!(
                 !code.contains(forbidden),
