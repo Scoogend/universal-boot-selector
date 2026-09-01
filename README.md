@@ -159,4 +159,13 @@ covered by fixture tests; real-firmware validation is pending.
 
 ## Licence
 
-MIT
+**Proprietary — all rights reserved.** See [LICENSE](LICENSE).
+
+The source is public so it can be read and audited — which matters for a
+program that writes to your firmware. It is **not** open source: you may read
+it, and you may run the published binaries for personal, non-commercial use,
+but redistribution, resale and derivative works require written permission.
+
+Third-party dependencies keep their own licences (MIT, Apache-2.0, BSD, Zlib,
+MPL-2.0). Linux packages link against LGPL libraries — WebKitGTK and GTK —
+whose own terms are unaffected.

@@ -1,21 +1,109 @@
-MIT License
+Universal Boot Selector
+Copyright (c) 2026 Scoogend. All rights reserved.
+Tous droits reserves.
 
-Copyright (c) 2026 Scoogend
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+=============================================================================
+RESUME EN FRANCAIS (le texte anglais ci-dessous fait foi)
+=============================================================================
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+Ce logiciel n'est PAS un logiciel libre. Le code source est visible
+publiquement sur GitHub, mais cela ne donne aucun droit de l'utiliser, de le
+copier, de le modifier, de le redistribuer ou de le vendre.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+Vous avez le droit de :
+  - lire le code source ;
+  - utiliser les binaires publies dans les Releases, a titre personnel et
+    non commercial, sur vos propres machines.
+
+Vous n'avez pas le droit de :
+  - redistribuer le logiciel, modifie ou non ;
+  - le vendre, l'integrer a un produit, ou en tirer un revenu ;
+  - publier une version derivee.
+
+Le logiciel est fourni sans aucune garantie. Il modifie des variables de
+demarrage du micrologiciel : son auteur ne peut etre tenu responsable
+d'aucun dommage.
+
+
+=============================================================================
+LICENCE (texte de reference)
+=============================================================================
+
+1. DEFINITIONS
+
+   "The Software" means the source code, build scripts, documentation,
+   assets, and compiled binaries of Universal Boot Selector, as published in
+   the repository github.com/Scoogend/universal-boot-selector and in its
+   Releases.
+
+   "The Author" means Scoogend, sole copyright holder.
+
+2. RESERVATION OF RIGHTS
+
+   All rights are reserved. The Software is proprietary. Publishing its
+   source code publicly does NOT place it in the public domain and does NOT
+   make it open source. No right is granted except those stated in section 3.
+
+3. PERMITTED USE
+
+   a. You may read and study the source code.
+
+   b. You may run the binaries published in the Releases of the repository,
+      for personal, non-commercial purposes, on machines you own or
+      administer.
+
+   c. GitHub's Terms of Service grant every GitHub user the right to view
+      and fork public repositories. That right is acknowledged and is not
+      extended by this licence beyond what those Terms require.
+
+4. PROHIBITED WITHOUT WRITTEN PERMISSION
+
+   You may not:
+
+   a. redistribute the Software, in source or binary form, modified or not;
+   b. sell, rent, sublicense, or otherwise commercially exploit it;
+   c. publish derivative works, forks intended for distribution, or
+      rebranded versions;
+   d. incorporate any part of it into another product, free or paid;
+   e. remove or alter this licence, copyright notices, or attribution.
+
+   Written permission may be requested from the Author.
+
+5. CONTRIBUTIONS
+
+   By submitting a contribution (pull request, patch, or otherwise) you
+   assign to the Author all rights in that contribution, so that the Author
+   may licence the Software, including commercially, without further
+   consent.
+
+6. THIRD-PARTY COMPONENTS
+
+   The Software depends on third-party components, each governed by its own
+   licence — predominantly MIT, Apache-2.0, BSD, Zlib and MPL-2.0. Those
+   licences continue to apply to those components and are unaffected by this
+   one.
+
+   Linux packages link against WebKitGTK and GTK, which are licensed under
+   the LGPL. Their source is available from their respective projects, and
+   nothing in this licence restricts the rights the LGPL grants you in
+   respect of those libraries.
+
+7. NO WARRANTY
+
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+   OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+   MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+
+8. LIMITATION OF LIABILITY
+
+   The Software modifies firmware boot variables. IN NO EVENT SHALL THE
+   AUTHOR BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
+   ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+   CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+   SOFTWARE, INCLUDING BUT NOT LIMITED TO LOSS OF DATA, INABILITY TO BOOT, OR
+   DAMAGE TO HARDWARE OR FIRMWARE.
+
+9. GOVERNING LAW
+
+   This licence is governed by French law.
