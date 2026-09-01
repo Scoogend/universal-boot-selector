@@ -244,7 +244,13 @@ function renderEntryDetail(entry) {
         <button type="button" class="btn btn-primary" data-act="reboot"
                 ${blocked || view.read_only ? "disabled" : ""}>
           ${icon("arrow")} Redémarrer sur ${esc(shortName(entry.display_name))}
-        </button>`}
+        </button>
+        ${isDefault(entry) ? `<span class="row-tag is-current">système par défaut</span>` : `
+        <button type="button" class="btn" data-act="default"
+                ${blocked || view.read_only ? "disabled" : ""}
+                title="Modifie l'ordre de démarrage permanent">
+          Définir par défaut
+        </button>`}`}
     </div>
 
     ${view.read_only ? `<p class="detail-sub" style="margin-top:var(--s-4)">
@@ -303,6 +309,12 @@ function osLabel(os) {
 function bootIdLabel(id) {
   if (typeof id !== "number") return "—";
   return "Boot" + id.toString(16).toUpperCase().padStart(4, "0");
+}
+
+/** Vrai si cette entrée est déjà la première de l'ordre permanent. */
+function isDefault(entry) {
+  const order = view?.detection?.boot_order;
+  return Array.isArray(order) && order.length > 0 && order[0] === entry.id;
 }
 
 function shortName(name) {
@@ -430,6 +442,31 @@ document.addEventListener("click", async (event) => {
   if (act === "unname") {
     const next = await call("clear_alias", { stableId: selectedId });
     if (next) { view = next; render(); setStatus("Nom d'origine rétabli.", "ok"); }
+    return;
+  }
+
+  if (act === "default") {
+    const entry = findEntry(selectedId);
+    if (!entry) return;
+
+    const ok = confirm(
+      `Définir « ${entry.display_name} » comme système de démarrage par défaut ?\n\n` +
+      `C'est la SEULE opération de cette application qui soit permanente. ` +
+      `Elle réordonne BootOrder : l'entrée passe en tête, les autres gardent ` +
+      `leur ordre relatif. Aucune entrée n'est créée ni supprimée, et le ` +
+      `composant privilégié le vérifie après coup.\n\n` +
+      `Si le système choisi ne démarre plus, il faudra passer par le menu du ` +
+      `firmware (souvent F12) pour en choisir un autre.`
+    );
+    if (!ok) return;
+
+    setStatus("Application du système par défaut…");
+    const next = await call("set_default_system", { stableId: selectedId });
+    if (next) {
+      view = next;
+      render();
+      setStatus(`« ${entry.display_name} » démarre désormais par défaut.`, "ok");
+    }
     return;
   }
 

@@ -30,11 +30,17 @@ pub enum Request {
     Hello { protocol: u32 },
     /// Lecture de l'instantane complet des variables de demarrage.
     ReadState,
-    /// Ecriture de `BootNext`. **Unique operation d'ecriture du projet.**
+    /// Ecriture de `BootNext` : le demarrage suivant, une seule fois.
     ///
     /// `id` doit etre exactement quatre chiffres hexadecimaux. Toute autre
     /// forme est rejetee avant d'atteindre le firmware.
     SetBootNext { id: String },
+    /// Reordonnancement de `BootOrder` pour changer le systeme par defaut.
+    ///
+    /// **Seule ecriture permanente du projet.** Elle ne peut que deplacer une
+    /// entree existante en tete : le garde-fou verifie apres coup que la
+    /// nouvelle liste est une permutation exacte de l'ancienne.
+    SetDefaultSystem { id: String },
 }
 
 /// Reponses du helper.
@@ -51,6 +57,8 @@ pub enum Response {
     State { variables: BTreeMap<String, String> },
     /// Ecriture effectuee et verifiee par le helper lui-meme.
     Written { id: String },
+    /// Systeme par defaut applique et verifie par le helper lui-meme.
+    DefaultApplied { id: String },
     Error { kind: ErrorKind, message: String },
 }
 

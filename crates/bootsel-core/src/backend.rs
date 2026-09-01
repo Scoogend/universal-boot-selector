@@ -115,6 +115,20 @@ pub trait BootBackend: Send + Sync + std::fmt::Debug {
     /// firmware et applique [`crate::guard`] apres l'appel.
     fn set_boot_next(&self, target: BootId) -> Result<(), BackendError>;
 
+    /// Place une entree en tete de l'ordre de demarrage permanent.
+    ///
+    /// **Seule ecriture permanente du projet**, et la seule qui touche
+    /// `BootOrder`. Elle est bornee a un reordonnancement : aucune entree ne
+    /// peut etre creee ni supprimee. Le contrat est verifie apres coup par
+    /// [`crate::guard::verify_only_boot_order_reordered`].
+    ///
+    /// Par defaut, un backend la refuse : il faut l'implementer explicitement.
+    fn set_default_system(&self, _target: BootId) -> Result<(), BackendError> {
+        Err(BackendError::Unsupported(
+            "ce backend ne sait pas changer le systeme par defaut".to_string(),
+        ))
+    }
+
     /// Redemarre la machine. Appele uniquement apres validation du garde-fou.
     fn reboot(&self) -> Result<(), BackendError>;
 

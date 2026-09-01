@@ -32,11 +32,12 @@
 
 #[cfg(windows)]
 mod firmware;
+#[cfg(target_os = "linux")]
+mod linux_firmware;
 #[cfg(windows)]
 mod pipe;
 #[cfg(windows)]
 mod privilege;
-#[cfg(windows)]
 mod service;
 
 /// Code de sortie : usage incorrect.
@@ -53,10 +54,12 @@ fn main() {
         }
         Ok(Mode::SelfTest) => run_self_test(),
         Ok(Mode::Serve { pipe_name }) => run_serve(&pipe_name),
+        Ok(Mode::OneShot) => run_oneshot(),
         Err(message) => {
             eprintln!("{message}");
             eprintln!();
             eprintln!("Usage : bootsel-helper --serve --pipe <nom>");
+            eprintln!("        bootsel-helper --oneshot");
             eprintln!("        bootsel-helper --self-test");
             eprintln!("        bootsel-helper --version");
             std::process::exit(EXIT_USAGE);
@@ -67,7 +70,15 @@ fn main() {
 /// Modes acceptes. Toute autre combinaison d'arguments est refusee.
 #[derive(Debug, PartialEq, Eq)]
 enum Mode {
+    /// Windows : tube nomme, une elevation pour toute la session.
     Serve { pipe_name: String },
+    /// Linux : une requete sur l'entree standard, une reponse sur la sortie.
+    ///
+    /// Sous Linux la lecture ne demande aucun privilege ; seule l'ecriture en
+    /// exige. Une invocation ponctuelle par `pkexec` est donc plus simple et
+    /// plus sobre qu'un service permanent : le processus privilegie ne vit que
+    /// le temps d'une operation.
+    OneShot,
     SelfTest,
     Version,
 }
@@ -82,6 +93,7 @@ fn parse_args(args: &[String]) -> Result<Mode, String> {
         [] => Err("aucun argument fourni".into()),
         [a] if a == "--version" || a == "-V" => Ok(Mode::Version),
         [a] if a == "--self-test" => Ok(Mode::SelfTest),
+        [a] if a == "--oneshot" => Ok(Mode::OneShot),
         [a, b, c] if a == "--serve" && b == "--pipe" => {
             if is_valid_pipe_name(c) {
                 Ok(Mode::Serve {
@@ -152,15 +164,37 @@ fn run_serve(pipe_name: &str) {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
 fn run_self_test() {
-    eprintln!("le helper Windows n'est pas disponible sur cette plateforme");
+    println!("bootsel-helper {} — autotest", env!("CARGO_PKG_VERSION"));
+    println!("Mode firmware : {:?}", linux_firmware::firmware_mode());
+    match linux_firmware::read_state() {
+        Ok(state) => {
+            println!("Variables lues : {}", state.variables.len());
+            println!("Entrees de demarrage : {}", state.entry_ids().len());
+            match state.boot_order() {
+                Some(o) => println!(
+                    "BootOrder : {}",
+                    o.iter().map(|i| i.variable_name()).collect::<Vec<_>>().join(", ")
+                ),
+                None => println!("BootOrder : illisible"),
+            }
+        }
+        Err(e) => println!("Lecture du firmware impossible : {e}"),
+    }
+    println!();
+    println!("Aucune modification n'a ete effectuee.");
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
+fn run_self_test() {
+    eprintln!("plateforme non prise en charge");
     std::process::exit(EXIT_FAILURE);
 }
 
 #[cfg(not(windows))]
 fn run_serve(_pipe_name: &str) {
-    eprintln!("le helper Windows n'est pas disponible sur cette plateforme");
+    eprintln!("le mode tube nomme est propre a Windows ; utilisez --oneshot");
     std::process::exit(EXIT_FAILURE);
 }
 

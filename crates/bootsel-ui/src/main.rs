@@ -23,6 +23,8 @@ mod state;
 use state::{AppState, Startup};
 
 fn main() {
+    force_software_webview_if_needed();
+
     let args: Vec<String> = std::env::args().skip(1).collect();
 
     if args.iter().any(|a| a == "--help" || a == "-h") {
@@ -62,6 +64,7 @@ fn main() {
             commands::request_elevation,
             commands::prepare_selection,
             commands::confirm_and_reboot,
+            commands::set_default_system,
             commands::set_alias,
             commands::clear_alias,
             commands::set_preference,
@@ -69,6 +72,35 @@ fn main() {
         .run(tauri::generate_context!())
         .expect("lancement de l interface");
 }
+
+/// Neutralise le rendu accelere de WebKit sous Linux si l'appelant ne s'est
+/// pas deja prononce.
+///
+/// Constate sur une machine reelle : avec le pilote `nouveau` et une carte
+/// NVIDIA, WebKitGTK echoue silencieusement au rendu — le noyau rejette les
+/// commandes graphiques — et la fenetre reste **entierement blanche**, sans le
+/// moindre message d'erreur exploitable.
+///
+/// Ces deux variables font retomber WebKit sur un rendu logiciel. Le cout est
+/// negligeable : cette interface affiche une liste et du texte, elle n'anime
+/// rien. Mieux vaut un rendu logiciel qui marche partout qu'une acceleration
+/// qui laisse certains utilisateurs devant une page blanche.
+///
+/// Un reglage deja present dans l'environnement est respecte : on ne prive
+/// personne d'un choix explicite.
+#[cfg(target_os = "linux")]
+fn force_software_webview_if_needed() {
+    for name in ["WEBKIT_DISABLE_COMPOSITING_MODE", "WEBKIT_DISABLE_DMABUF_RENDERER"] {
+        if std::env::var_os(name).is_none() {
+            // SAFETY: appel effectue avant tout demarrage de fil, donc sans
+            // concurrence sur l'environnement du processus.
+            unsafe { std::env::set_var(name, "1") };
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn force_software_webview_if_needed() {}
 
 /// Relaie les branchements et retraits de peripheriques vers l'interface.
 ///

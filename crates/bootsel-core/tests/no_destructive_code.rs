@@ -149,6 +149,7 @@ const PRIVILEGED_ALLOWLIST: &[&str] = &[
     // apres validation du garde-fou. Voir SECURITY.md.
     "crates/bootsel-ui/src/commands.rs",
     "crates/bootsel-platform/src/linux/firmware.rs",
+    "crates/bootsel-platform/src/linux/elevate.rs",
     "crates/bootsel-platform/src/linux/power.rs",
 ];
 
@@ -439,7 +440,7 @@ fn shipped() {}";
     #[test]
     fn the_allowlist_stays_small_enough_to_audit() {
         assert!(
-            PRIVILEGED_ALLOWLIST.len() <= 8,
+            PRIVILEGED_ALLOWLIST.len() <= 9,
             "la surface privilegiee grandit : {} entrees. Chaque ajout doit \
              etre justifie dans SECURITY.md.",
             PRIVILEGED_ALLOWLIST.len()

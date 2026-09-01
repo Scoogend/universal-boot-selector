@@ -10,11 +10,13 @@
 //! Seule l'ecriture de `BootNext` demande une elevation, au moment precis ou
 //! l'utilisateur la declenche.
 
+pub mod elevate;
 pub mod firmware;
 pub mod power;
 pub mod storage;
 
 use bootsel_core::backend::{BackendError, BootBackend};
+use bootsel_core::ipc::{ErrorKind, Request, Response};
 use bootsel_core::model::{BootId, FirmwareMode, FirmwareState, StorageDevice};
 use std::path::{Path, PathBuf};
 
@@ -71,13 +73,36 @@ impl BootBackend for LinuxBootBackend {
         storage::list_devices(&self.root)
     }
 
-    fn set_boot_next(&self, _target: BootId) -> Result<(), BackendError> {
-        // Aucune ecriture n'est possible depuis le processus d'interface.
-        // L'ecriture appartient au helper privilegie, lance via pkexec.
+    fn set_boot_next(&self, target: BootId) -> Result<(), BackendError> {
         if self.read_only {
             return Err(BackendError::ReadOnlyMode);
         }
-        Err(BackendError::PrivilegeRequired)
+        // Le processus d'interface ne sait pas ecrire : il delegue au helper,
+        // lance par pkexec le temps de l'operation.
+        match elevate::run_privileged(&Request::SetBootNext { id: target.hex4() })? {
+            Response::Written { id } if id == target.hex4() => Ok(()),
+            Response::Written { id } => Err(BackendError::WriteRefused(format!(
+                "le composant privilegie a confirme {id} au lieu de {}",
+                target.hex4()
+            ))),
+            Response::Error { kind, message } => Err(translate(kind, message)),
+            other => Err(BackendError::Io(format!("reponse inattendue : {other:?}"))),
+        }
+    }
+
+    fn set_default_system(&self, target: BootId) -> Result<(), BackendError> {
+        if self.read_only {
+            return Err(BackendError::ReadOnlyMode);
+        }
+        match elevate::run_privileged(&Request::SetDefaultSystem { id: target.hex4() })? {
+            Response::DefaultApplied { id } if id == target.hex4() => Ok(()),
+            Response::DefaultApplied { id } => Err(BackendError::WriteRefused(format!(
+                "le composant privilegie a confirme {id} au lieu de {}",
+                target.hex4()
+            ))),
+            Response::Error { kind, message } => Err(translate(kind, message)),
+            other => Err(BackendError::Io(format!("reponse inattendue : {other:?}"))),
+        }
     }
 
     fn reboot(&self) -> Result<(), BackendError> {
@@ -96,6 +121,20 @@ impl BootBackend for LinuxBootBackend {
     }
 }
 
+/// Traduit une erreur du protocole en erreur locale.
+fn translate(kind: ErrorKind, message: String) -> BackendError {
+    match kind {
+        ErrorKind::PrivilegeRequired => BackendError::PrivilegeRequired,
+        ErrorKind::NotUefi => BackendError::NotUefi,
+        ErrorKind::EntryNotFound => BackendError::TargetVanished,
+        // Un garde-fou viole ne doit jamais ressembler a un succes.
+        ErrorKind::WriteRefused | ErrorKind::GuardViolation => {
+            BackendError::WriteRefused(message)
+        }
+        ErrorKind::BadRequest | ErrorKind::Internal => BackendError::Io(message),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -109,12 +148,17 @@ mod tests {
     }
 
     #[test]
-    fn the_default_backend_cannot_write_without_the_helper() {
-        let b = LinuxBootBackend::new();
-        assert_eq!(
-            b.set_boot_next(BootId(2)),
-            Err(BackendError::PrivilegeRequired)
-        );
+    fn a_guard_violation_never_becomes_a_success() {
+        let error = translate(ErrorKind::GuardViolation, "BootOrder a change".into());
+        assert!(matches!(error, BackendError::WriteRefused(_)));
+        assert!(!error.guarantees_no_write());
+    }
+
+    #[test]
+    fn a_cancelled_authentication_guarantees_no_write() {
+        let error = translate(ErrorKind::PrivilegeRequired, String::new());
+        assert_eq!(error, BackendError::PrivilegeRequired);
+        assert!(error.guarantees_no_write());
     }
 
     #[test]

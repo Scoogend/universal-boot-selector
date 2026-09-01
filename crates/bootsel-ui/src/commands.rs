@@ -188,6 +188,52 @@ pub fn confirm_and_reboot(
     Ok(report)
 }
 
+/// Place une entree en tete de l'ordre de demarrage permanent.
+///
+/// # Pourquoi cette commande est separee du redemarrage
+///
+/// C'est la seule ecriture **permanente** du projet, et la seule qui touche
+/// `BootOrder`. Elle ne partage donc rien avec le bouton de redemarrage :
+/// interface distincte, confirmation distincte, garde-fou distinct.
+///
+/// L'operation est bornee a un reordonnancement. Le helper verifie apres coup
+/// que la nouvelle liste est une permutation exacte de l'ancienne : aucune
+/// entree ne peut etre creee ni supprimee.
+///
+/// Ne redemarre pas.
+#[tauri::command]
+pub fn set_default_system(
+    state: State<'_, AppState>,
+    stable_id: String,
+) -> Result<AppView, String> {
+    {
+        let guard = state.lock()?;
+        let backend = guard.backend();
+
+        // Reresolution par cle stable sur un firmware fraichement relu : le
+        // Boot#### affiche il y a plusieurs minutes ne fait pas foi.
+        let detection = detect(backend, guard.config()).map_err(|e| e.to_string())?;
+        let entry = detection
+            .entries
+            .iter()
+            .find(|e| e.stable_id == stable_id)
+            .ok_or("cette entree n existe plus dans le firmware")?;
+
+        if !entry.availability.is_selectable() {
+            return Err("cette entree ne peut pas devenir le systeme par defaut".to_string());
+        }
+
+        backend.set_default_system(entry.id).map_err(|e| {
+            if e.guarantees_no_write() {
+                format!("{e}\n\nAucune modification n a ete effectuee.")
+            } else {
+                format!("{e}")
+            }
+        })?;
+    }
+    refresh(state)
+}
+
 /// Renomme une entree. **Alias purement local.**
 ///
 /// Ne modifie ni le disque, ni la partition, ni le chargeur, ni la description
@@ -367,6 +413,6 @@ mod tests") {
                 "commande absente du handler Tauri : {command}"
             );
         }
-        assert_eq!(commands.len(), 7, "commandes exposees : {commands:?}");
+        assert_eq!(commands.len(), 8, "commandes exposees : {commands:?}");
     }
 }

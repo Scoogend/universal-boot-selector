@@ -11,14 +11,19 @@
 //! Toute requete non reconnue est refusee sans effet. Il n'existe aucun chemin
 //! par lequel une entree malformee atteindrait le firmware.
 
+#[cfg(windows)]
 use crate::firmware;
+#[cfg(windows)]
 use crate::pipe::Connection;
+#[cfg(target_os = "linux")]
+use crate::linux_firmware as firmware;
 use bootsel_core::backend::BackendError;
 use bootsel_core::ipc::{
     encode_state, parse_target_id, ErrorKind, Request, Response, PROTOCOL_VERSION,
 };
 
 /// Se connecte a l'interface et traite les requetes jusqu'a la fermeture.
+#[cfg(windows)]
 pub fn serve(pipe_name: &str) -> Result<(), String> {
     let mut connection = Connection::connect(pipe_name)
         .map_err(|e| format!("connexion au tube {pipe_name} impossible : {e}"))?;
@@ -47,7 +52,7 @@ pub fn serve(pipe_name: &str) -> Result<(), String> {
 
 /// Traite une ligne brute. Fonction pure du point de vue du protocole :
 /// une entree, une reponse, aucun etat conserve.
-fn handle_line(line: &str) -> Response {
+pub fn handle_line(line: &str) -> Response {
     match serde_json::from_str::<Request>(line) {
         Ok(request) => handle_request(request),
         // Une ligne illisible n'est jamais interpretee « au mieux ».
@@ -72,7 +77,12 @@ fn handle_request(request: Request) -> Response {
             Response::Hello {
                 protocol: PROTOCOL_VERSION,
                 helper_version: env!("CARGO_PKG_VERSION").to_string(),
+                #[cfg(windows)]
                 elevated: firmware::is_elevated(),
+                // Sous Linux le helper n'est lance que par pkexec : s'il
+                // s'execute, il est deja privilegie.
+                #[cfg(not(windows))]
+                elevated: true,
             }
         }
 
@@ -102,7 +112,42 @@ fn handle_request(request: Request) -> Response {
                 Err(e) => error_response(e),
             }
         }
+
+        Request::SetDefaultSystem { id } => {
+            // Meme validation stricte que pour BootNext : quatre chiffres
+            // hexadecimaux, ou rien.
+            let Some(target) = parse_target_id(&id) else {
+                return Response::Error {
+                    kind: ErrorKind::BadRequest,
+                    message: format!(
+                        "identifiant invalide : {id:?}. Quatre chiffres hexadecimaux attendus."
+                    ),
+                };
+            };
+
+            match set_default_system(target) {
+                Ok(()) => Response::DefaultApplied {
+                    id: target.hex4(),
+                },
+                Err(e) => error_response(e),
+            }
+        }
     }
+}
+
+/// Change le systeme par defaut. Disponible sous Linux uniquement pour
+/// l'instant : l'equivalent Windows reste a ecrire.
+#[cfg(target_os = "linux")]
+fn set_default_system(target: bootsel_core::model::BootId) -> Result<(), BackendError> {
+    firmware::write_default_system(target).map(|_| ())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn set_default_system(_target: bootsel_core::model::BootId) -> Result<(), BackendError> {
+    Err(BackendError::Unsupported(
+        "le changement de systeme par defaut n'est pas encore implemente sur cette plateforme"
+            .to_string(),
+    ))
 }
 
 /// Traduit une erreur interne en categorie transmissible, sans perdre le

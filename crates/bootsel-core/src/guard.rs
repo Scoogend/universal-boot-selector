@@ -65,6 +65,24 @@ pub enum GuardError {
 
     #[error("BootNext contient {length} octets au lieu de 2 : valeur inexploitable")]
     BootNextMalformed { length: usize },
+
+    #[error("BootOrder est illisible : refus d'y toucher")]
+    BootOrderUnreadable,
+
+    #[error(
+        "le contenu de BootOrder a change : des entrees ont ete ajoutees ou supprimees, \
+         alors que seul un reordonnancement etait demande"
+    )]
+    BootOrderContentChanged,
+
+    #[error(
+        "le systeme par defaut n'a pas ete applique : BootOrder commence par {actual:?} \
+         au lieu de {expected}"
+    )]
+    DefaultSystemNotApplied {
+        expected: BootId,
+        actual: Option<BootId>,
+    },
 }
 
 /// Liste toutes les differences entre deux instantanes, triees par nom.
@@ -132,6 +150,54 @@ pub fn verify_only_boot_next_changed(
     let actual = BootId(u16::from_le_bytes([raw[0], raw[1]]));
     if actual != expected {
         return Err(GuardError::BootNextWrongValue { expected, actual });
+    }
+
+    Ok(())
+}
+
+/// Verifie qu'une ecriture de `BootOrder` s'est bornee a un reordonnancement.
+///
+/// # Pourquoi cette verification est plus stricte qu'elle n'en a l'air
+///
+/// Changer le systeme par defaut est la seule ecriture **permanente** du
+/// projet. Le risque n'est pas de reordonner : c'est d'ajouter, de supprimer
+/// ou d'inventer une entree au passage, ce qui rendrait un systeme
+/// inaccessible.
+///
+/// On exige donc que la nouvelle liste soit une **permutation exacte** de
+/// l'ancienne — memes identifiants, meme nombre — avec la cible en tete. Et
+/// qu'aucune entree `Boot####` n'ait ete creee ni detruite.
+pub fn verify_only_boot_order_reordered(
+    before: &FirmwareState,
+    after: &FirmwareState,
+    expected_first: BootId,
+) -> Result<(), GuardError> {
+    let (Some(old), Some(new)) = (before.boot_order(), after.boot_order()) else {
+        return Err(GuardError::BootOrderUnreadable);
+    };
+
+    if new.first() != Some(&expected_first) {
+        return Err(GuardError::DefaultSystemNotApplied {
+            expected: expected_first,
+            actual: new.first().copied(),
+        });
+    }
+
+    // Permutation exacte : rien n'a ete ajoute ni retire.
+    let (mut a, mut b) = (old.clone(), new.clone());
+    a.sort_unstable();
+    b.sort_unstable();
+    if a != b {
+        return Err(GuardError::BootOrderContentChanged);
+    }
+
+    // Les entrees elles-memes doivent etre intactes : seul l'ordre change.
+    let foreign: Vec<VarChange> = diff(before, after)
+        .into_iter()
+        .filter(|c| c.name() != VAR_BOOT_ORDER)
+        .collect();
+    if !foreign.is_empty() {
+        return Err(GuardError::ForeignChanges { changes: foreign });
     }
 
     Ok(())
