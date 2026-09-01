@@ -186,7 +186,7 @@ pub fn read_state() -> Result<FirmwareState, BackendError> {
 /// Sert a decider s'il faut demander une elevation, sans faire echouer un
 /// cycle de detection complet pour rien.
 pub fn can_read_firmware() -> bool {
-    matches!(read_variable(VAR_BOOT_ORDER), Ok(_))
+    read_variable(VAR_BOOT_ORDER).is_ok()
 }
 
 #[cfg(test)]

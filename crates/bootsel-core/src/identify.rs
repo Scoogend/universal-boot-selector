@@ -154,7 +154,7 @@ fn is_removable_fallback(path: &str) -> bool {
         "\\efi\\boot\\bootaa64.efi",
         "\\efi\\boot\\bootarm.efi",
     ];
-    FALLBACKS.iter().any(|f| path == *f)
+    FALLBACKS.contains(&path)
 }
 
 /// Construit le nom affiche par defaut.

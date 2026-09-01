@@ -237,7 +237,11 @@ fn test_legacy_bios_refuses_set_boot_next() {
 /// redemarrage est refuse.
 #[test]
 fn test_guard_detects_foreign_change() {
-    let cases: Vec<(WriteBehavior, fn(&BackendError) -> bool)> = vec![
+    /// Un comportement de firmware defaillant, et le predicat qui reconnait
+    /// l erreur que le garde-fou doit produire face a lui.
+    type HostileCase = (WriteBehavior, fn(&BackendError) -> bool);
+
+    let cases: Vec<HostileCase> = vec![
         (WriteBehavior::AlsoReorderBootOrder, |e| {
             matches!(e, BackendError::Guard(GuardError::BootOrderModified))
         }),

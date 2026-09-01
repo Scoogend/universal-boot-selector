@@ -32,6 +32,8 @@ use windows::Win32::Security::{
     AdjustTokenPrivileges, LookupPrivilegeValueW, LUID_AND_ATTRIBUTES, SE_PRIVILEGE_ENABLED,
     SE_SHUTDOWN_NAME, TOKEN_ADJUST_PRIVILEGES, TOKEN_PRIVILEGES, TOKEN_QUERY,
 };
+// Ces symboles ne servent qu au redemarrage reel, absent des binaires de test.
+#[cfg(not(test))]
 use windows::Win32::System::Shutdown::{
     ExitWindowsEx, EWX_REBOOT, SHTDN_REASON_FLAG_PLANNED, SHTDN_REASON_MAJOR_OTHER,
     SHTDN_REASON_MINOR_OTHER,
@@ -88,9 +90,9 @@ pub fn reboot() -> Result<(), BackendError> {
     // n'est meme pas compile.
     #[cfg(test)]
     {
-        return Err(BackendError::Unsupported(
+        Err(BackendError::Unsupported(
             "redemarrage indisponible dans un binaire de test".to_string(),
-        ));
+        ))
     }
 
     #[cfg(not(test))]

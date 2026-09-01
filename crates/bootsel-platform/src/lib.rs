@@ -73,7 +73,7 @@ pub fn create_backend(options: &BackendOptions) -> Result<Box<dyn BootBackend>, 
         } else {
             windows::elevated::ElevatedWindowsBackend::new(channel)
         };
-        return Ok(Box::new(backend));
+        Ok(Box::new(backend))
     }
 
     #[cfg(target_os = "linux")]
@@ -86,7 +86,7 @@ pub fn create_backend(options: &BackendOptions) -> Result<Box<dyn BootBackend>, 
         } else {
             linux::LinuxBootBackend::new()
         };
-        return Ok(Box::new(backend));
+        Ok(Box::new(backend))
     }
 
     #[cfg(not(any(windows, target_os = "linux")))]
