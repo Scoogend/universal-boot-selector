@@ -15,7 +15,7 @@ use crate::alias::Config;
 use crate::backend::{BackendError, BootBackend};
 use crate::detect::build_entries;
 use crate::guard;
-use crate::model::{Availability, BootEntry, BootId, FirmwareState};
+use crate::model::{Availability, BootEntry, BootId, BootloaderKind, FirmwareState};
 use serde::{Deserialize, Serialize};
 
 /// Ce qui sera fait, presente a l'utilisateur avant confirmation.
@@ -31,9 +31,94 @@ pub struct SelectionPlan {
     /// Identifiant observe lors de la preparation, a titre purement informatif.
     /// Il est reresolu avant l'ecriture et peut differer.
     pub observed_id: BootId,
+    /// Effets de bord previsibles du demarrage vise. Jamais bloquants : ils
+    /// sont affiches avant confirmation pour que l'utilisateur decide en
+    /// connaissance de cause.
+    pub warnings: Vec<SelectionWarning>,
+}
+
+/// Un effet de bord que le demarrage vise est susceptible de produire.
+///
+/// Ces avertissements ne portent pas sur ce que fait l'application — elle
+/// n'ecrit que `BootNext` — mais sur ce que **le chargeur cible** peut faire
+/// une fois lance. Les taire reviendrait a promettre une innocuite qui n'est
+/// pas la notre a garantir.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+pub enum SelectionWarning {
+    /// La cible est le chargeur de repli des supports amovibles,
+    /// `\EFI\BOOT\BOOTX64.EFI`.
+    ///
+    /// Sur un systeme Secure Boot, ce fichier est generalement `shim`. Demarre
+    /// par ce chemin, shim execute `fallback.efi`, qui **cree des entrees UEFI
+    /// et reordonne l'ordre de demarrage permanent** d'apres les fichiers
+    /// `BOOTX64.CSV` trouves sur la partition, puis redemarre la machine en
+    /// affichant « Reset System » et un compte a rebours.
+    ///
+    /// Ce comportement appartient a shim, pas a cette application. Mais il en
+    /// resulte que l'ordre de demarrage permanent peut changer, alors meme que
+    /// l'application n'y a pas touche. L'utilisateur doit le savoir avant.
+    ///
+    /// Constate sur une machine reelle : selectionner une telle entree a fait
+    /// apparaitre une nouvelle entree en tete de l'ordre de demarrage, et
+    /// afficher un compte a rebours dont le libelle laisse craindre un
+    /// effacement alors qu'il s'agit d'un simple redemarrage.
+    RemovableFallbackLoader {
+        /// Nom d'une entree designant le meme support par son chargeur
+        /// propre, quand il en existe une. La preferer evite tout l'effet de
+        /// bord.
+        better_entry: Option<String>,
+    },
+}
+
+impl SelectionWarning {
+    /// Titre court, pour la ligne d'en-tete de l'avertissement.
+    pub fn title(&self) -> &'static str {
+        match self {
+            SelectionWarning::RemovableFallbackLoader { .. } => {
+                "Chargeur de repli : l'ordre de demarrage peut changer"
+            }
+        }
+    }
+
+    /// Explication complete, telle qu'elle doit etre montree a l'utilisateur.
+    pub fn detail(&self) -> String {
+        match self {
+            SelectionWarning::RemovableFallbackLoader { better_entry } => {
+                let mut text = String::from(
+                    "Cette entree passe par le chargeur de repli des supports amovibles \
+                     (\\EFI\\BOOT\\BOOTX64.EFI). Sur un systeme Secure Boot, ce fichier est \
+                     generalement shim. Demarre par ce chemin, shim execute fallback.efi, \
+                     qui cree des entrees UEFI et reordonne l'ordre de demarrage permanent, \
+                     puis redemarre la machine en affichant « Reset System » avec un compte \
+                     a rebours.\n\n\
+                     « Reset System » signifie redemarrer, pas effacer : c'est le service \
+                     UEFI qui relance la machine. Aucune donnee n'est touchee.\n\n\
+                     Ce comportement appartient a shim, pas a cette application. Mais il en \
+                     resulte que votre ordre de demarrage permanent peut changer, alors que \
+                     l'application ne le modifie jamais.",
+                );
+                if let Some(better) = better_entry {
+                    text.push_str(&format!(
+                        "\n\nL'entree « {better} » designe le meme support par son chargeur \
+                         propre. La choisir evite tout cet effet de bord."
+                    ));
+                }
+                text
+            }
+        }
+    }
 }
 
 impl SelectionPlan {
+    /// Vrai si le texte de confirmation propose une meilleure entree.
+    #[cfg(test)]
+    fn detail_mentions_better_entry(&self) -> bool {
+        self.warnings
+            .iter()
+            .any(|w| w.detail().contains("designe le meme support"))
+    }
+
     /// Texte de confirmation affiche a l'utilisateur.
     pub fn confirmation_message(&self) -> String {
         let mut lines = vec![format!(
@@ -51,6 +136,16 @@ impl SelectionPlan {
              UEFI BootNext est ecrite ; le firmware la consomme au demarrage suivant."
                 .to_string(),
         );
+
+        // Les effets de bord du chargeur cible viennent apres la garantie, et
+        // ne la contredisent pas : l'application ne modifie rien de plus, mais
+        // ce qu'elle demarre peut le faire.
+        for warning in &self.warnings {
+            lines.push(String::new());
+            lines.push(warning.title().to_string());
+            lines.push(warning.detail());
+        }
+
         lines.join("\n")
     }
 }
@@ -95,7 +190,33 @@ pub fn prepare(
         device_label: entry.device_label.clone(),
         efi_path: entry.efi_path.clone(),
         observed_id: entry.id,
+        warnings: warnings_for(entry, entries),
     })
+}
+
+/// Releve les effets de bord previsibles du demarrage vise.
+fn warnings_for(target: &BootEntry, entries: &[BootEntry]) -> Vec<SelectionWarning> {
+    let mut warnings = Vec::new();
+
+    if target.bootloader == BootloaderKind::RemovableFallback {
+        // Une autre entree designe-t-elle la meme partition par un chargeur
+        // dedie ? Si oui, la proposer : elle evite entierement l'effet de bord.
+        let better_entry = target.partition_guid.and_then(|guid| {
+            entries
+                .iter()
+                .find(|e| {
+                    e.stable_id != target.stable_id
+                        && e.partition_guid == Some(guid)
+                        && e.bootloader != BootloaderKind::RemovableFallback
+                        && e.availability.is_selectable()
+                })
+                .map(|e| e.display_name.clone())
+        });
+
+        warnings.push(SelectionWarning::RemovableFallbackLoader { better_entry });
+    }
+
+    warnings
 }
 
 /// Applique la selection : relit, revalide, ecrit `BootNext`, verifie.
@@ -352,6 +473,7 @@ mod tests {
             device_label: None,
             efi_path: None,
             observed_id: BootId(2),
+            warnings: Vec::new(),
         };
 
         assert_eq!(
@@ -503,6 +625,167 @@ mod tests {
                 "BootOrder modifie avec le comportement {behavior:?}"
             );
         }
+    }
+
+    // -- Effets de bord du chargeur cible ----------------------------------
+    //
+    // Ces tests encodent un incident constate sur une machine reelle :
+    // selectionner l'entree « UEFI OS » d'un disque MX Linux a lance shim par
+    // le chemin de repli. shim a execute fallback.efi, qui a cree une entree
+    // « MX Linux », l'a placee en tete de l'ordre de demarrage, puis a
+    // redemarre en affichant « Reset System » et un compte a rebours.
+    //
+    // L'application n'y etait pour rien : son garde-fou avait verifie que
+    // BootOrder etait intact juste apres l'ecriture. Mais l'utilisateur
+    // meritait d'etre prevenu avant de confirmer.
+
+    /// Construit une entree de test minimale.
+    fn entry(name: &str, loader: BootloaderKind, partition: &str, path: &str) -> BootEntry {
+        use crate::efi::{Guid, Transport};
+        use crate::model::{Availability, Confidence, OsKind};
+
+        BootEntry {
+            id: BootId(1),
+            stable_id: format!("v1-gpt:{:032x}", name.len()),
+            firmware_description: name.to_string(),
+            display_name: name.to_string(),
+            detected_name: name.to_string(),
+            os: OsKind::LinuxGeneric,
+            bootloader: loader,
+            transport: Transport::Usb,
+            confidence: Confidence::Probable,
+            availability: Availability::Available,
+            active: true,
+            efi_path: Some(path.to_string()),
+            partition_guid: Guid::parse(partition),
+            partition_number: Some(1),
+            device_label: Some("USB ACME HD320".to_string()),
+            is_current: false,
+        }
+    }
+
+    const PART: &str = "db0f7ec2-3eab-482e-8958-d252c49c6bf9";
+
+    #[test]
+    fn a_removable_fallback_target_warns_about_the_boot_order_side_effect() {
+        let fallback = entry(
+            "UEFI OS",
+            BootloaderKind::RemovableFallback,
+            PART,
+            "\\EFI\\BOOT\\BOOTX64.EFI",
+        );
+        let entries = vec![fallback.clone()];
+
+        let plan = prepare(&entries, &fallback.stable_id).expect("plan");
+
+        assert_eq!(plan.warnings.len(), 1, "un avertissement est attendu");
+        let warning = &plan.warnings[0];
+        assert!(matches!(
+            warning,
+            SelectionWarning::RemovableFallbackLoader { .. }
+        ));
+
+        let detail = warning.detail();
+        // L'utilisateur doit comprendre que « Reset System » veut dire
+        // redemarrer : c'est ce libelle qui a fait craindre un effacement.
+        assert!(detail.contains("redemarrer, pas effacer"));
+        assert!(detail.contains("ordre de demarrage permanent"));
+        assert!(detail.contains("fallback.efi"));
+    }
+
+    #[test]
+    fn the_warning_points_to_the_dedicated_loader_when_one_exists() {
+        // Situation exacte de la machine de test : deux entrees sur la meme
+        // partition, l'une de repli, l'autre propre a la distribution.
+        let fallback = entry(
+            "UEFI OS",
+            BootloaderKind::RemovableFallback,
+            PART,
+            "\\EFI\\BOOT\\BOOTX64.EFI",
+        );
+        let dedicated = entry(
+            "MX Linux",
+            BootloaderKind::Shim,
+            PART,
+            "\\EFI\\MX\\shimx64.efi",
+        );
+        let entries = vec![fallback.clone(), dedicated];
+
+        let plan = prepare(&entries, &fallback.stable_id).expect("plan");
+
+        match &plan.warnings[0] {
+            SelectionWarning::RemovableFallbackLoader { better_entry } => {
+                assert_eq!(
+                    better_entry.as_deref(),
+                    Some("MX Linux"),
+                    "l'entree dediee du meme support doit etre proposee"
+                );
+            }
+        }
+        assert!(plan.detail_mentions_better_entry());
+    }
+
+    #[test]
+    fn a_dedicated_loader_produces_no_warning() {
+        let dedicated = entry(
+            "MX Linux",
+            BootloaderKind::Shim,
+            PART,
+            "\\EFI\\MX\\shimx64.efi",
+        );
+        let plan = prepare(&[dedicated.clone()], &dedicated.stable_id).expect("plan");
+        assert!(
+            plan.warnings.is_empty(),
+            "un chargeur dedie n'a pas cet effet de bord"
+        );
+    }
+
+    #[test]
+    fn a_loader_on_another_partition_is_not_proposed_as_an_alternative() {
+        let fallback = entry(
+            "UEFI OS",
+            BootloaderKind::RemovableFallback,
+            PART,
+            "\\EFI\\BOOT\\BOOTX64.EFI",
+        );
+        let elsewhere = entry(
+            "Windows Boot Manager",
+            BootloaderKind::WindowsBootManager,
+            "94582b83-d53d-48c6-a61f-4de3af63bed5",
+            "\\EFI\\MICROSOFT\\BOOT\\BOOTMGFW.EFI",
+        );
+        let plan = prepare(
+            &[fallback.clone(), elsewhere],
+            &fallback.stable_id,
+        )
+        .expect("plan");
+
+        match &plan.warnings[0] {
+            SelectionWarning::RemovableFallbackLoader { better_entry } => {
+                assert_eq!(
+                    *better_entry, None,
+                    "seule une entree du meme support est une alternative"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_warning_appears_in_the_confirmation_message() {
+        let fallback = entry(
+            "UEFI OS",
+            BootloaderKind::RemovableFallback,
+            PART,
+            "\\EFI\\BOOT\\BOOTX64.EFI",
+        );
+        let plan = prepare(&[fallback.clone()], &fallback.stable_id).expect("plan");
+        let message = plan.confirmation_message();
+
+        // La garantie de l'application reste affichee...
+        assert!(message.contains("ne sera pas modifie"));
+        // ...et l'effet de bord du chargeur aussi, sans la contredire.
+        assert!(message.contains("Reset System"));
+        assert!(message.contains("ordre de demarrage permanent"));
     }
 
     #[test]

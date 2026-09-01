@@ -104,7 +104,28 @@ GUIDs**: nothing is mounted and no file is opened to reach that conclusion.
 Removable devices appear within a second of being plugged in, via native device
 notifications rather than polling.
 
-### An honest limitation
+### An honest limitation about `BootOrder`
+
+This program never writes `BootOrder`, and a runtime guard proves it after
+every write. But **what you boot into can**, and pretending otherwise would be
+dishonest.
+
+The specific case, observed on real hardware: selecting an entry that points at
+the removable-media fallback path `\EFI\BOOT\BOOTX64.EFI` typically launches
+`shim`. Booted through *that* path, shim runs `fallback.efi`, which reads the
+`BOOTX64.CSV` files on the partition, **creates UEFI boot entries, reorders
+`BootOrder`**, and then restarts the machine showing `Reset System` with a
+countdown.
+
+`Reset System` here is `EFI_RUNTIME_SERVICES.ResetSystem()` — a **reboot**, not
+an erase. Nothing is wiped. But the wording is alarming, and the permanent boot
+order really does change.
+
+So the app now warns you before you confirm such a target, explains what will
+happen, and — when another entry points at the same partition through its own
+loader — tells you to pick that one instead, which avoids the whole side effect.
+
+### Another honest limitation
 
 A bootable disk plugged in *after* boot usually has no firmware entry, because
 firmwares enumerate removable media at POST. `BootNext` can only target an entry

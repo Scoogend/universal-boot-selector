@@ -215,6 +215,7 @@ fn test_legacy_bios_refuses_set_boot_next() {
         device_label: None,
         efi_path: None,
         observed_id: BootId(2),
+        warnings: Vec::new(),
     };
 
     assert_eq!(

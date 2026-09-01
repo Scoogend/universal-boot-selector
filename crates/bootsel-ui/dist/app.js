@@ -134,6 +134,8 @@ function entryRow(entry) {
   let tag = "";
   if (entry.is_current) tag = `<span class="row-tag is-current">démarrage actuel</span>`;
   else if (blocked) tag = `<span class="row-tag is-blocked">${esc(availabilityLabel(entry.availability))}</span>`;
+  else if (entry.bootloader === "removable_fallback")
+    tag = `<span class="row-tag is-blocked" title="Démarrer par ce chargeur peut modifier l'ordre de démarrage">chargeur de repli</span>`;
 
   return `
     <button type="button" role="option" aria-selected="${selected}"
@@ -325,11 +327,48 @@ function openDialog(plan) {
       L'ordre de démarrage permanent ne sera pas modifié. Seule la variable
       UEFI <strong>BootNext</strong> est écrite ; le firmware la consomme au
       démarrage suivant, puis l'oublie.
-    </p>`;
+    </p>
+    ${(plan.warnings ?? []).map(warningBlock).join("")}`;
 
   el.dialogConfirm.textContent = `Redémarrer sur ${shortName(plan.display_name)}`;
   el.overlay.hidden = false;
   el.dialogCancel.focus();
+}
+
+/* Effets de bord previsibles du chargeur cible.
+ *
+ * Ils ne contredisent pas la garantie de l'application : elle n'ecrit que
+ * BootNext. Mais ce qu'elle demarre peut, lui, modifier l'ordre de demarrage.
+ * Le taire reviendrait a promettre une innocuite qui n'est pas la notre. */
+function warningBlock(warning) {
+  const titre = {
+    removable_fallback_loader:
+      "Chargeur de repli : l'ordre de démarrage peut changer",
+  }[warning.kind] ?? "Effet de bord possible";
+
+  return `
+    <div class="notice" style="margin:var(--s-4) 0 0">
+      ${icon("warn")}
+      <div>
+        <p><strong>${esc(titre)}</strong></p>
+        <p>Cette entrée passe par le chargeur de repli des supports amovibles
+           (<code>\\EFI\\BOOT\\BOOTX64.EFI</code>). Sur un système Secure Boot,
+           démarrer par ce chemin fait généralement s'exécuter
+           <code>fallback.efi</code>, qui <strong>crée des entrées UEFI et
+           réordonne l'ordre de démarrage permanent</strong>, puis redémarre la
+           machine en affichant « Reset System » avec un compte à rebours.</p>
+        <p><strong>« Reset System » veut dire redémarrer, pas effacer</strong> :
+           c'est le service UEFI qui relance la machine. Aucune donnée n'est
+           touchée.</p>
+        <p>Ce comportement appartient au chargeur, pas à cette application.
+           Mais votre ordre de démarrage permanent peut en changer.</p>
+        ${warning.better_entry
+          ? `<p>L'entrée <strong>${esc(warning.better_entry)}</strong> désigne le
+              même support par son chargeur propre. La choisir évite tout cet
+              effet de bord.</p>`
+          : ""}
+      </div>
+    </div>`;
 }
 
 function closeDialog() {
