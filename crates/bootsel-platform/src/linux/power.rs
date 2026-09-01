@@ -30,7 +30,13 @@ static REBOOT_ARMED: AtomicBool = AtomicBool::new(false);
 
 /// Delai au-dela duquel on considere que la commande ne repondra pas.
 #[cfg(not(test))]
-const TIMEOUT: Duration = Duration::from_secs(10);
+const TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Temps laisse au systeme pour s'arreter avant de conclure a un echec.
+///
+/// Genereux : un arret propre demonte les volumes et arrete les services.
+#[cfg(not(test))]
+const DELAI_CONSTAT: Duration = Duration::from_secs(12);
 
 /// Autorise le redemarrage pour la duree du processus.
 ///
@@ -75,15 +81,44 @@ fn do_reboot() -> Result<(), BackendError> {
 
     for methode in methodes_de_redemarrage() {
         match tenter(&methode) {
-            Ok(()) => return Ok(()),
+            // Une commande acceptee ne prouve rien : sous SysVinit, elogind
+            // accepte l'appel D-Bus et ne redemarre pas. On attend donc de
+            // *constater* l'arret plutot que de le supposer.
+            Ok(()) => {
+                if machine_part_bien() {
+                    return Ok(());
+                }
+                refus.push(format!("{} : accepte mais sans effet", methode.nom));
+            }
             Err(raison) => refus.push(format!("{} : {raison}", methode.nom)),
         }
     }
 
     Err(BackendError::Io(format!(
-        "aucune methode de redemarrage n a abouti. {}",
+        "aucune methode de redemarrage n a abouti ({})",
         refus.join(" ; ")
     )))
+}
+
+/// Attend de voir si la machine s'arrete reellement.
+///
+/// # Pourquoi ce controle existe
+///
+/// Constate sur MX Linux : `dbus-send` renvoie un succes, elogind accepte la
+/// demande, et **rien ne se passe**. L'application affichait alors
+/// « Redemarrage en cours... » indefiniment, alors que la selection etait
+/// faite depuis longtemps et qu'il suffisait de redemarrer a la main.
+///
+/// Un redemarrage reel tue ce processus bien avant la fin de l'attente : si
+/// cette fonction rend la main, c'est que la methode n'a pas fonctionne.
+#[cfg(not(test))]
+fn machine_part_bien() -> bool {
+    let echeance = std::time::Instant::now() + DELAI_CONSTAT;
+    while std::time::Instant::now() < echeance {
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    // Toujours la : la machine n'est pas partie.
+    false
 }
 
 /// Methodes de redemarrage, de la plus propre a la plus rustique.
@@ -151,6 +186,21 @@ fn methodes_de_redemarrage() -> Vec<Methode> {
         });
     }
 
+    // 4. Dernier recours : le meme arret propre, mais avec les droits root
+    //    obtenus par pkexec. Demande une authentification, d'ou sa place en
+    //    fin de liste — on ne derange l'utilisateur que si rien d'autre n'a
+    //    fonctionne.
+    if let (Some(pkexec), Some(_)) = (
+        premier_existant(&["/usr/bin/pkexec", "/bin/pkexec"]),
+        premier_existant(&["/sbin/shutdown", "/usr/sbin/shutdown"]),
+    ) {
+        methodes.push(Methode {
+            nom: "pkexec shutdown",
+            programme: pkexec,
+            arguments: &["/sbin/shutdown", "-r", "now"],
+        });
+    }
+
     methodes
 }
 
@@ -199,9 +249,12 @@ fn tenter(methode: &Methode) -> Result<(), String> {
                 }
                 return Err(format!("code {} {details}", status.code().unwrap_or(-1)));
             }
-            // La machine part normalement avant qu'on relise le code de
-            // sortie : ce delai n'existe que pour ne pas rester bloque.
-            Ok(None) if std::time::Instant::now() >= deadline => return Ok(()),
+            // Une commande qui ne rend jamais la main est bloquee, pas en
+            // train de redemarrer : on ne la prend plus pour un succes.
+            Ok(None) if std::time::Instant::now() >= deadline => {
+                let _ = child.kill();
+                return Err("aucune reponse".to_string());
+            }
             Ok(None) => std::thread::sleep(Duration::from_millis(100)),
             Err(e) => return Err(format!("attente : {e}")),
         }
@@ -271,6 +324,22 @@ mod tests") {
                 "redemarrage brutal interdit : {forbidden}"
             );
         }
+    }
+
+    #[test]
+    fn an_accepted_command_is_not_taken_for_a_reboot() {
+        // Constate sur MX Linux : dbus-send renvoie un succes, elogind
+        // accepte, et rien ne se passe. L application affichait
+        // « Redemarrage en cours... » indefiniment.
+        let code = shipped_source();
+        assert!(
+            code.contains("machine_part_bien()"),
+            "l arret doit etre constate, jamais suppose"
+        );
+        assert!(
+            code.contains("accepte mais sans effet"),
+            "une commande acceptee sans effet doit etre signalee comme telle"
+        );
     }
 
     #[test]

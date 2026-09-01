@@ -494,6 +494,24 @@ el.dialogConfirm.addEventListener("click", async () => {
       <p>Redémarrage en cours…</p>`;
     el.dialogConfirm.hidden = true;
     el.dialogCancel.hidden = true;
+
+    /* Un redémarrage réel emporte cette fenêtre bien avant l'échéance. Si on
+     * est encore là, c'est qu'il n'a pas eu lieu — et le dire vaut mieux que
+     * laisser tourner « Redémarrage en cours… » indéfiniment, comme une
+     * version précédente le faisait. */
+    setTimeout(() => {
+      if (el.overlay.hidden) return;
+      el.dialogBody.innerHTML = `
+        <p>Le prochain démarrage est bien programmé sur
+           <strong>${esc(report.display_name)}</strong>.</p>
+        <p class="guarantee">Ordre de démarrage permanent inchangé :
+           ${esc(report.boot_order.join(", ") || "—")}</p>
+        <p><strong>Le redémarrage automatique n'a pas abouti.</strong>
+           Redémarrez vous-même quand vous voulez, par le menu de votre système :
+           vous arriverez sur ${esc(report.display_name)}.</p>`;
+      el.dialogCancel.hidden = false;
+      el.dialogCancel.textContent = "Fermer";
+    }, 20000);
   } else {
     closeDialog();
   }
