@@ -183,7 +183,21 @@ pub fn confirm_and_reboot(
     #[cfg(target_os = "linux")]
     bootsel_platform::linux::power::arm_reboot();
 
-    reboot_after(backend, &outcome).map_err(|e| e.to_string())?;
+    // Un redemarrage qui echoue n'annule pas la selection : BootNext est
+    // ecrite et verifiee. Le dire est essentiel — sinon l'utilisateur croit
+    // que rien n'a marche, alors qu'il lui suffit de redemarrer lui-meme.
+    if let Err(e) = reboot_after(backend, &outcome) {
+        return Err(format!(
+            "Le prochain demarrage est bien programme sur {} : BootNext a ete \
+             ecrite et verifiee, et l'ordre de demarrage permanent n'a pas \
+             change.\n\n\
+             Seul le redemarrage automatique a echoue. Redemarrez vous-meme \
+             quand vous voulez, par n'importe quel moyen : vous arriverez \
+             sur {}.\n\n\
+             Detail technique : {e}",
+            outcome.display_name, outcome.display_name
+        ));
+    }
 
     Ok(report)
 }
@@ -371,6 +385,32 @@ mod tests") {
         assert!(
             preserved < arm,
             "la verification de BootOrder doit preceder l armement"
+        );
+    }
+
+    #[test]
+    fn a_failed_reboot_still_tells_the_user_the_selection_succeeded() {
+        // Constate a l'usage : le redemarrage echouait sur une distribution
+        // sans systemd, et le message laissait croire que toute l'operation
+        // avait rate — alors que BootNext etait ecrite et verifiee.
+        let body = shipped_source()
+            .split("pub fn confirm_and_reboot")
+            .nth(1)
+            .expect("la commande de redemarrage doit exister")
+            .to_string();
+
+        let branche = body
+            .split("if let Err(e) = reboot_after")
+            .nth(1)
+            .expect("l'echec du redemarrage doit etre traite a part");
+
+        assert!(
+            branche.contains("bien programme"),
+            "le message doit affirmer que la selection a abouti"
+        );
+        assert!(
+            branche.contains("Redemarrez vous-meme"),
+            "le message doit dire quoi faire"
         );
     }
 

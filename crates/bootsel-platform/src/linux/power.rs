@@ -74,9 +74,9 @@ fn do_reboot() -> Result<(), BackendError> {
     let mut refus = Vec::new();
 
     for methode in methodes_de_redemarrage() {
-        match tenter(methode) {
+        match tenter(&methode) {
             Ok(()) => return Ok(()),
-            Err(raison) => refus.push(format!("{} : {raison}", methode.0)),
+            Err(raison) => refus.push(format!("{} : {raison}", methode.nom)),
         }
     }
 
@@ -88,53 +88,97 @@ fn do_reboot() -> Result<(), BackendError> {
 
 /// Methodes de redemarrage, de la plus propre a la plus rustique.
 ///
-/// # Pourquoi une liste et non un appel unique
+/// # Trois hypotheses fausses, corrigees a l'usage
 ///
-/// Une version precedente appelait `systemctl reboot` sans condition. Sur MX
-/// Linux, qui tourne sous **SysVinit**, la commande echoue net :
+/// 1. **`systemctl` n'est pas toujours utilisable.** MX Linux tourne sous
+///    SysVinit ; la commande refuse net. Sa presence est donc verifiee.
 ///
-/// ```text
-/// System has not been booted with systemd as init system (PID 1).
-/// ```
+/// 2. **`loginctl` non plus.** Sur cette meme machine, `/usr/bin/loginctl`
+///    appartient au paquet *systemd* et refuse pour la meme raison — alors
+///    qu'`elogind` tourne bel et bien et accepterait la demande. Passer par
+///    **D-Bus** contourne le probleme : `org.freedesktop.login1` est
+///    l'interface commune a systemd-logind et a elogind.
 ///
-/// Le meme probleme se pose sur antiX, Devuan, Void, Alpine ou Gentoo sous
-/// OpenRC. Supposer systemd revenait a exclure une partie des distributions
-/// que ce projet vise explicitement.
-///
-/// L'ordre suit une regle simple : d'abord ce qui demande le moins de
-/// privileges et arrete le systeme le plus proprement.
+/// 3. **Le `PATH` d'une application graphique ne contient pas `/sbin`.**
+///    `Command::new("shutdown")` echouait avec « fichier introuvable » alors
+///    que le programme existait. Tous les chemins sont donc absolus.
 #[cfg(not(test))]
-fn methodes_de_redemarrage() -> Vec<(&'static str, &'static str, &'static [&'static str])> {
-    let mut methodes: Vec<(&str, &str, &[&str])> = Vec::new();
+fn methodes_de_redemarrage() -> Vec<Methode> {
+    let mut methodes = Vec::new();
 
-    // 1. systemd, quand il est reellement PID 1. Fonctionne sans privilege
-    //    grace a polkit.
+    // 1. systemd, uniquement s'il est reellement PID 1.
     if std::path::Path::new("/run/systemd/system").is_dir() {
-        methodes.push(("systemctl", "systemctl", &["reboot"]));
+        if let Some(programme) = premier_existant(&["/usr/bin/systemctl", "/bin/systemctl"]) {
+            methodes.push(Methode {
+                nom: "systemctl",
+                programme,
+                arguments: &["reboot"],
+            });
+        }
     }
 
-    // 2. elogind, l'equivalent autonome adopte par les distributions sans
-    //    systemd. MX Linux l'utilise, et il autorise un utilisateur de la
-    //    session locale a redemarrer sans mot de passe.
-    methodes.push(("loginctl", "loginctl", &["reboot"]));
+    // 2. D-Bus. Une seule interface pour systemd-logind et elogind, et elle
+    //    fonctionne sans privilege pour l'utilisateur de la session locale.
+    if let Some(programme) = premier_existant(&["/usr/bin/dbus-send", "/bin/dbus-send"]) {
+        methodes.push(Methode {
+            nom: "dbus-send",
+            programme,
+            arguments: &[
+                "--system",
+                "--print-reply",
+                "--dest=org.freedesktop.login1",
+                "/org/freedesktop/login1",
+                "org.freedesktop.login1.Manager.Reboot",
+                "boolean:true",
+            ],
+        });
+    }
 
-    // 3. SysVinit et OpenRC. Passe par les scripts d'arret, donc demonte
-    //    proprement, mais demande les droits root.
-    methodes.push(("shutdown", "shutdown", &["-r", "now"]));
+    // 3. SysVinit et OpenRC. Arret propre, mais demande les droits root.
+    if let Some(programme) = premier_existant(&["/sbin/shutdown", "/usr/sbin/shutdown"]) {
+        methodes.push(Methode {
+            nom: "shutdown",
+            programme,
+            arguments: &["-r", "now"],
+        });
+    }
+
+    if let Some(programme) = premier_existant(&["/sbin/reboot", "/usr/sbin/reboot"]) {
+        methodes.push(Methode {
+            nom: "reboot",
+            programme,
+            arguments: &[],
+        });
+    }
 
     methodes
 }
 
+/// Une facon de redemarrer. Programme et arguments sont fixes a la
+/// compilation : rien n'est construit a partir d'une donnee exterieure.
+#[cfg(not(test))]
+struct Methode {
+    nom: &'static str,
+    programme: &'static str,
+    arguments: &'static [&'static str],
+}
+
+/// Premier chemin absolu existant et executable de la liste.
+#[cfg(not(test))]
+fn premier_existant(chemins: &[&'static str]) -> Option<&'static str> {
+    chemins
+        .iter()
+        .find(|c| std::path::Path::new(c).is_file())
+        .copied()
+}
+
 /// Lance une commande de redemarrage et attend brievement son verdict.
 #[cfg(not(test))]
-fn tenter(
-    (_nom, programme, arguments): (&'static str, &'static str, &'static [&'static str]),
-) -> Result<(), String> {
+fn tenter(methode: &Methode) -> Result<(), String> {
     use std::process::{Command, Stdio};
 
-    // Arguments separes, aucun interpreteur, aucune chaine construite.
-    let mut child = Command::new(programme)
-        .args(arguments)
+    let mut child = Command::new(methode.programme)
+        .args(methode.arguments)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
@@ -153,13 +197,10 @@ fn tenter(
                     let _ = err.read_to_string(&mut buffer);
                     details = buffer.lines().next().unwrap_or("").to_string();
                 }
-                return Err(format!(
-                    "code {} {details}",
-                    status.code().unwrap_or(-1)
-                ));
+                return Err(format!("code {} {details}", status.code().unwrap_or(-1)));
             }
-            // La machine part normalement en redemarrage avant qu'on relise le
-            // code de sortie : ce delai n'existe que pour ne pas rester bloque.
+            // La machine part normalement avant qu'on relise le code de
+            // sortie : ce delai n'existe que pour ne pas rester bloque.
             Ok(None) if std::time::Instant::now() >= deadline => return Ok(()),
             Ok(None) => std::thread::sleep(Duration::from_millis(100)),
             Err(e) => return Err(format!("attente : {e}")),
@@ -217,7 +258,10 @@ mod tests") {
             code.contains("/run/systemd/system"),
             "la presence de systemd doit etre verifiee, jamais supposee"
         );
-        assert!(code.contains("\"loginctl\""), "elogind doit etre pris en charge");
+        assert!(
+            code.contains("org.freedesktop.login1.Manager.Reboot"),
+            "elogind doit etre joint par D-Bus, pas par loginctl qui appartient a systemd"
+        );
         assert!(code.contains("\"shutdown\""), "un repli SysVinit est necessaire");
 
         // Aucune methode brutale, qui perdrait les ecritures en attente.
@@ -230,12 +274,34 @@ mod tests") {
     }
 
     #[test]
+    fn every_program_is_an_absolute_path() {
+        // Le PATH d'une application graphique ne contient pas /sbin :
+        // `Command::new("shutdown")` echouait avec « fichier introuvable »
+        // alors que le programme existait.
+        let code = shipped_source();
+        for chemin in ["/sbin/shutdown", "/sbin/reboot", "/usr/bin/dbus-send"] {
+            assert!(code.contains(chemin), "chemin absolu attendu : {chemin}");
+        }
+        // Les commentaires citent nommement la forme fautive pour expliquer
+        // le bug : seul le code effectif doit etre examine.
+        let effectif: String = code
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            !effectif.contains("Command::new(\"shutdown\")"),
+            "aucun programme ne doit etre resolu par le PATH"
+        );
+    }
+
+    #[test]
     fn the_command_is_built_from_separate_arguments_without_a_shell() {
         let code = shipped_source();
 
         // Arguments separes et constants : rien n est concatene, donc rien
         // n est injectable.
-        assert!(code.contains(".args(arguments)"));
+        assert!(code.contains(".args(methode.arguments)"));
         for forbidden in ["sh -c", "\"bash\"", "format!(\"systemctl"] {
             assert!(
                 !code.contains(forbidden),
