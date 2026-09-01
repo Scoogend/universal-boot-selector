@@ -71,40 +71,98 @@ pub fn reboot() -> Result<(), BackendError> {
 
 #[cfg(not(test))]
 fn do_reboot() -> Result<(), BackendError> {
+    let mut refus = Vec::new();
+
+    for methode in methodes_de_redemarrage() {
+        match tenter(methode) {
+            Ok(()) => return Ok(()),
+            Err(raison) => refus.push(format!("{} : {raison}", methode.0)),
+        }
+    }
+
+    Err(BackendError::Io(format!(
+        "aucune methode de redemarrage n a abouti. {}",
+        refus.join(" ; ")
+    )))
+}
+
+/// Methodes de redemarrage, de la plus propre a la plus rustique.
+///
+/// # Pourquoi une liste et non un appel unique
+///
+/// Une version precedente appelait `systemctl reboot` sans condition. Sur MX
+/// Linux, qui tourne sous **SysVinit**, la commande echoue net :
+///
+/// ```text
+/// System has not been booted with systemd as init system (PID 1).
+/// ```
+///
+/// Le meme probleme se pose sur antiX, Devuan, Void, Alpine ou Gentoo sous
+/// OpenRC. Supposer systemd revenait a exclure une partie des distributions
+/// que ce projet vise explicitement.
+///
+/// L'ordre suit une regle simple : d'abord ce qui demande le moins de
+/// privileges et arrete le systeme le plus proprement.
+#[cfg(not(test))]
+fn methodes_de_redemarrage() -> Vec<(&'static str, &'static str, &'static [&'static str])> {
+    let mut methodes: Vec<(&str, &str, &[&str])> = Vec::new();
+
+    // 1. systemd, quand il est reellement PID 1. Fonctionne sans privilege
+    //    grace a polkit.
+    if std::path::Path::new("/run/systemd/system").is_dir() {
+        methodes.push(("systemctl", "systemctl", &["reboot"]));
+    }
+
+    // 2. elogind, l'equivalent autonome adopte par les distributions sans
+    //    systemd. MX Linux l'utilise, et il autorise un utilisateur de la
+    //    session locale a redemarrer sans mot de passe.
+    methodes.push(("loginctl", "loginctl", &["reboot"]));
+
+    // 3. SysVinit et OpenRC. Passe par les scripts d'arret, donc demonte
+    //    proprement, mais demande les droits root.
+    methodes.push(("shutdown", "shutdown", &["-r", "now"]));
+
+    methodes
+}
+
+/// Lance une commande de redemarrage et attend brievement son verdict.
+#[cfg(not(test))]
+fn tenter(
+    (_nom, programme, arguments): (&'static str, &'static str, &'static [&'static str]),
+) -> Result<(), String> {
     use std::process::{Command, Stdio};
 
     // Arguments separes, aucun interpreteur, aucune chaine construite.
-    let mut child = Command::new("systemctl")
-        .arg("reboot")
+    let mut child = Command::new(programme)
+        .args(arguments)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|e| {
-            BackendError::Io(format!(
-                "systemctl est introuvable ou n a pas pu etre lance : {e}"
-            ))
-        })?;
+        .map_err(|e| format!("{e}"))?;
 
-    // La machine part normalement en redemarrage avant que l on relise le
-    // code de sortie ; ce delai n existe que pour ne jamais rester bloque.
     let deadline = std::time::Instant::now() + TIMEOUT;
     loop {
         match child.try_wait() {
             Ok(Some(status)) if status.success() => return Ok(()),
             Ok(Some(status)) => {
-                return Err(BackendError::Io(format!(
-                    "systemctl reboot a echoue (code {})",
+                let mut details = String::new();
+                if let Some(mut err) = child.stderr.take() {
+                    use std::io::Read;
+                    let mut buffer = String::new();
+                    let _ = err.read_to_string(&mut buffer);
+                    details = buffer.lines().next().unwrap_or("").to_string();
+                }
+                return Err(format!(
+                    "code {} {details}",
                     status.code().unwrap_or(-1)
-                )))
+                ));
             }
-            Ok(None) if std::time::Instant::now() >= deadline => {
-                // Le redemarrage est probablement en cours : on ne tue pas le
-                // processus, on rend simplement la main.
-                return Ok(());
-            }
+            // La machine part normalement en redemarrage avant qu'on relise le
+            // code de sortie : ce delai n'existe que pour ne pas rester bloque.
+            Ok(None) if std::time::Instant::now() >= deadline => return Ok(()),
             Ok(None) => std::thread::sleep(Duration::from_millis(100)),
-            Err(e) => return Err(BackendError::Io(format!("attente de systemctl : {e}"))),
+            Err(e) => return Err(format!("attente : {e}")),
         }
     }
 }
@@ -149,12 +207,18 @@ mod tests") {
     }
 
     #[test]
-    fn the_reboot_is_delegated_to_systemd_and_never_forced() {
+    fn the_reboot_never_assumes_systemd() {
+        // Un test ecrit apres coup : la version precedente appelait
+        // `systemctl reboot` sans condition, et echouait sur MX Linux, qui
+        // tourne sous SysVinit.
         let code = shipped_source();
 
-        // Voie propre : systemd arrete les services et demonte les volumes.
-        assert!(code.contains("\"systemctl\""));
-        assert!(code.contains("\"reboot\""));
+        assert!(
+            code.contains("/run/systemd/system"),
+            "la presence de systemd doit etre verifiee, jamais supposee"
+        );
+        assert!(code.contains("\"loginctl\""), "elogind doit etre pris en charge");
+        assert!(code.contains("\"shutdown\""), "un repli SysVinit est necessaire");
 
         // Aucune methode brutale, qui perdrait les ecritures en attente.
         for forbidden in ["reboot(RB_", "RB_AUTOBOOT", "--force", "-f\"", "sync_and_reboot"] {
@@ -169,8 +233,9 @@ mod tests") {
     fn the_command_is_built_from_separate_arguments_without_a_shell() {
         let code = shipped_source();
 
-        // Arguments separes : rien n est concatene, donc rien n est injectable.
-        assert!(code.contains(".arg(\"reboot\")"));
+        // Arguments separes et constants : rien n est concatene, donc rien
+        // n est injectable.
+        assert!(code.contains(".args(arguments)"));
         for forbidden in ["sh -c", "\"bash\"", "format!(\"systemctl"] {
             assert!(
                 !code.contains(forbidden),
