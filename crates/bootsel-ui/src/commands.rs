@@ -180,6 +180,8 @@ pub fn confirm_and_reboot(
     // Unique point du projet ou le redemarrage est arme, apres validation.
     #[cfg(windows)]
     bootsel_platform::windows::power::arm_reboot();
+    #[cfg(target_os = "linux")]
+    bootsel_platform::linux::power::arm_reboot();
 
     reboot_after(backend, &outcome).map_err(|e| e.to_string())?;
 
@@ -256,21 +258,41 @@ mod tests {
     }
 
     #[test]
-    fn only_the_reboot_command_arms_the_lock() {
-        // Garde-fou de revue : `arm_reboot` ne doit apparaitre qu une seule
-        // fois dans le code livre, dans `confirm_and_reboot`, apres la
-        // validation du garde-fou.
-        let occurrences: Vec<&str> = shipped_source()
-            .lines()
-            .filter(|l| !l.trim_start().starts_with("//"))
-            .filter(|l| l.contains("arm_reboot"))
-            .collect();
+    fn the_lock_is_only_armed_inside_the_confirmed_reboot_command() {
+        // Il y a un armement par plateforme, mais tous doivent se trouver
+        // dans `confirm_and_reboot` : aucun ailleurs dans le code livre.
+        let source = shipped_source();
+        let body = source
+            .split("pub fn confirm_and_reboot")
+            .nth(1)
+            .expect("la commande de redemarrage doit exister");
 
+        let total = source.matches("arm_reboot()").count();
+        let inside = body.matches("arm_reboot()").count();
+
+        assert!(total > 0, "le redemarrage doit bien etre arme quelque part");
         assert_eq!(
-            occurrences.len(),
-            1,
-            "l armement du redemarrage doit apparaitre une seule fois : {occurrences:?}"
+            total, inside,
+            "un armement se trouve hors de confirm_and_reboot"
         );
+    }
+
+    #[test]
+    fn every_arming_is_guarded_by_a_platform_condition() {
+        // Un armement non garde s appliquerait a toutes les plateformes et
+        // echapperait a la revue plateforme par plateforme.
+        let lines: Vec<&str> = shipped_source().lines().collect();
+        for (index, line) in lines.iter().enumerate() {
+            if !line.contains("arm_reboot()") {
+                continue;
+            }
+            let previous = lines.get(index.wrapping_sub(1)).copied().unwrap_or("");
+            assert!(
+                previous.trim_start().starts_with("#[cfg("),
+                "armement non garde a la ligne {} : {line}",
+                index + 1
+            );
+        }
     }
 
     #[test]

@@ -1,7 +1,9 @@
 /target
 **/target
 node_modules/
-dist/
+
+# Note : `crates/bootsel-ui/dist/` n est PAS un repertoire de build.
+# C est le frontend lui-meme, ecrit a la main et versionne.
 *.log
 .DS_Store
 Thumbs.db

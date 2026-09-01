@@ -1,0 +1,155 @@
+name: Build
+
+# Construit et teste sur Windows et Linux. Sur un tag `v*`, publie les
+# paquets dans une Release.
+#
+# Aucune etape de ce workflow ne touche au firmware : la machine de CI
+# n'expose pas de variables UEFI, et la suite de tests s'execute
+# integralement contre le firmware simule.
+
+on:
+  push:
+    branches: [main, master]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  # ---------------------------------------------------------------------
+  # Verifications independantes de la plateforme
+  # ---------------------------------------------------------------------
+  controles:
+    name: Tests et controles de securite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Dependances systeme
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev \
+            librsvg2-dev patchelf libgtk-3-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Suite de tests complete
+        run: cargo test --workspace --features bootsel-platform/mock
+
+      - name: Controles de securite nommes
+        run: |
+          cargo test -p bootsel-core --test security
+          cargo test -p bootsel-core --test no_destructive_code
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+  # ---------------------------------------------------------------------
+  # Windows
+  # ---------------------------------------------------------------------
+  windows:
+    name: Paquet Windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Tests
+        run: cargo test --workspace --features bootsel-platform/mock
+
+      - name: Compilation
+        run: cargo build --release --workspace --features bootsel-platform/mock
+
+      - name: Assemblage du paquet
+        shell: bash
+        run: |
+          mkdir -p paquet/UniversalBootSelector-Windows
+          cp target/release/bootsel.exe \
+             target/release/bootsel-helper.exe \
+             target/release/bootsel-cli.exe \
+             paquet/UniversalBootSelector-Windows/
+          cp docs/LISEZ-MOI-windows.txt \
+             paquet/UniversalBootSelector-Windows/LISEZ-MOI.txt 2>/dev/null || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: UniversalBootSelector-Windows
+          path: paquet/UniversalBootSelector-Windows/
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------
+  # Linux (Debian et derivees)
+  # ---------------------------------------------------------------------
+  linux:
+    name: Paquet Linux
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Dependances systeme
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev \
+            librsvg2-dev patchelf libgtk-3-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Tests
+        run: cargo test --workspace --features bootsel-platform/mock
+
+      - name: Compilation
+        run: cargo build --release --workspace --features bootsel-platform/mock
+
+      - name: Assemblage du paquet
+        run: |
+          mkdir -p paquet/UniversalBootSelector-Linux
+          cp target/release/bootsel \
+             target/release/bootsel-helper \
+             target/release/bootsel-cli \
+             paquet/UniversalBootSelector-Linux/ 2>/dev/null || true
+          cp docs/LISEZ-MOI-linux.txt \
+             paquet/UniversalBootSelector-Linux/LISEZ-MOI.txt 2>/dev/null || true
+          ls -la paquet/UniversalBootSelector-Linux/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: UniversalBootSelector-Linux
+          path: paquet/UniversalBootSelector-Linux/
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------
+  # Publication, uniquement sur un tag
+  # ---------------------------------------------------------------------
+  publication:
+    name: Release
+    needs: [controles, windows, linux]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: paquets
+
+      - name: Archives
+        run: |
+          cd paquets
+          for dossier in */; do
+            nom="${dossier%/}"
+            zip -r "../${nom}.zip" "$dossier"
+          done
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: "*.zip"
+          generate_release_notes: true

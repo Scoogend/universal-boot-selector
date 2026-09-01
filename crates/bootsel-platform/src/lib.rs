@@ -13,6 +13,8 @@
 
 #[cfg(windows)]
 pub mod elevate;
+#[cfg(target_os = "linux")]
+pub mod linux;
 #[cfg(windows)]
 pub mod windows;
 
@@ -74,10 +76,23 @@ pub fn create_backend(options: &BackendOptions) -> Result<Box<dyn BootBackend>, 
         return Ok(Box::new(backend));
     }
 
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    {
+        // Sous Linux, `efivars` est lisible par tout utilisateur : la
+        // detection complete fonctionne sans elevation. L'option `elevate`
+        // n'a donc aucun effet ici ; seule l'ecriture en demandera une.
+        let backend = if options.read_only {
+            linux::LinuxBootBackend::read_only()
+        } else {
+            linux::LinuxBootBackend::new()
+        };
+        return Ok(Box::new(backend));
+    }
+
+    #[cfg(not(any(windows, target_os = "linux")))]
     {
         Err(BackendError::Unsupported(
-            "aucun backend n'est encore implemente pour cette plateforme".to_string(),
+            "aucun backend n'est implemente pour cette plateforme".to_string(),
         ))
     }
 }
@@ -116,6 +131,8 @@ mod tests {
         assert!(!backend.is_read_only());
         #[cfg(windows)]
         assert_eq!(backend.name(), "windows");
+        #[cfg(target_os = "linux")]
+        assert_eq!(backend.name(), "linux");
     }
 
     #[test]
