@@ -45,7 +45,13 @@ jobs:
         with:
           components: clippy
 
+      # Cle explicite : `runner.os` vaut "Linux" pour toutes les versions
+      # d Ubuntu, si bien qu un cache construit sur une image plus recente
+      # peut etre restaure ici et livrer des artefacts lies a des
+      # bibliotheques systeme incompatibles.
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: ubuntu-22.04-controles
 
       - name: Suite de tests complete
         run: cargo test --workspace --features bootsel-platform/mock
@@ -71,6 +77,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: windows-latest-paquets
 
       - name: Tests
         run: cargo test --workspace --features bootsel-platform/mock
@@ -158,6 +166,8 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: ubuntu-22.04-paquets
 
       - name: Tests
         run: cargo test --workspace --features bootsel-platform/mock
