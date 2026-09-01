@@ -43,10 +43,13 @@ jobs:
       - name: Suite de tests complete
         run: cargo test --workspace --features bootsel-platform/mock
 
+      # `testdata` expose le firmware simule aux tests d integration. Sans
+      # elle, ces deux suites ne compilent pas : le backend mock est derriere
+      # cette fonctionnalite pour ne jamais entrer dans un binaire de release.
       - name: Controles de securite nommes
         run: |
-          cargo test -p bootsel-core --test security
-          cargo test -p bootsel-core --test no_destructive_code
+          cargo test -p bootsel-core --features testdata --test security
+          cargo test -p bootsel-core --features testdata --test no_destructive_code
 
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings

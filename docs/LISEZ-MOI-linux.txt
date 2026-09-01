@@ -1,0 +1,69 @@
+UNIVERSAL BOOT SELECTOR — Linux
+===============================
+
+DEMARRER
+--------
+  ./bootsel
+
+Aucune elevation n'est demandee au lancement. Sous Linux,
+/sys/firmware/efi/efivars est lisible par tout utilisateur : la detection
+complete fonctionne en simple utilisateur.
+
+Seule l'ecriture de BootNext, au moment ou vous confirmez un redemarrage,
+demande une authentification.
+
+
+CE QUE FAIT L'APPLICATION
+-------------------------
+Elle ecrit UNE SEULE chose : la variable UEFI "BootNext", longue de deux
+octets, et uniquement quand vous confirmez.
+
+BootNext dit au firmware : "au prochain demarrage seulement, demarre sur
+ce systeme". Le firmware la consomme puis l'oublie.
+
+L'ordre de demarrage permanent (BootOrder) n'est JAMAIS modifie.
+
+
+CE QU'ELLE NE FAIT JAMAIS
+-------------------------
+  - modifier l'ordre de demarrage permanent
+  - formater, creer, supprimer ou redimensionner une partition
+  - modifier une table GPT ou MBR
+  - ecrire dans une partition EFI
+  - installer, remplacer ou reparer un chargeur de demarrage
+  - monter une partition pour la detecter
+  - executer quoi que ce soit trouve sur un peripherique
+
+Le code capable de faire ces choses n'existe pas dans le projet.
+
+En particulier, l'application n'appelle jamais efibootmgr avec -o ni
+--bootorder : un test refuse la compilation si ces motifs apparaissent.
+
+
+SI QUELQUE CHOSE NE DEMARRE PAS
+-------------------------------
+Redemarrez. Comme BootOrder n'a pas ete touche, le firmware retombe sur
+votre demarrage habituel.
+
+
+DEPENDANCES
+-----------
+Sur Debian et derivees :
+
+  sudo apt install libwebkit2gtk-4.1-0 libgtk-3-0
+
+
+LES TROIS FICHIERS
+------------------
+  bootsel          L'application.
+  bootsel-helper   Composant privilegie. Doit rester A COTE de bootsel.
+  bootsel-cli      Diagnostic en ligne de commande. LECTURE SEULE.
+
+
+ESSAYER SANS RISQUE
+-------------------
+  ./bootsel --mock-boot multi-os --dry-run
+  ./bootsel-cli
+
+Le premier utilise un firmware simule. Le second affiche vos vraies
+entrees de demarrage sans rien modifier.
