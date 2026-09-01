@@ -733,7 +733,8 @@ mod tests {
             PART,
             "\\EFI\\MX\\shimx64.efi",
         );
-        let plan = prepare(&[dedicated.clone()], &dedicated.stable_id).expect("plan");
+        let plan = prepare(std::slice::from_ref(&dedicated), &dedicated.stable_id)
+            .expect("plan");
         assert!(
             plan.warnings.is_empty(),
             "un chargeur dedie n'a pas cet effet de bord"
@@ -778,7 +779,8 @@ mod tests {
             PART,
             "\\EFI\\BOOT\\BOOTX64.EFI",
         );
-        let plan = prepare(&[fallback.clone()], &fallback.stable_id).expect("plan");
+        let plan = prepare(std::slice::from_ref(&fallback), &fallback.stable_id)
+            .expect("plan");
         let message = plan.confirmation_message();
 
         // La garantie de l'application reste affichee...

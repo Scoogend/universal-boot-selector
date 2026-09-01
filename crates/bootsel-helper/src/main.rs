@@ -198,6 +198,33 @@ fn run_serve(_pipe_name: &str) {
     std::process::exit(EXIT_FAILURE);
 }
 
+/// Lit une requete sur l'entree standard, ecrit une reponse, et sort.
+///
+/// C'est le mode d'appel sous Linux : `pkexec bootsel-helper --oneshot`. Le
+/// processus privilegie ne vit que le temps d'une operation, et la cible
+/// voyage dans le JSON plutot que sur la ligne de commande — donc aucun
+/// echappement d'argument a maitriser.
+fn run_oneshot() {
+    use std::io::{BufRead, Write};
+
+    let mut line = String::new();
+    if std::io::stdin().lock().read_line(&mut line).is_err() {
+        eprintln!("helper : requete illisible");
+        std::process::exit(EXIT_FAILURE);
+    }
+
+    let response = service::handle_line(line.trim());
+    let encoded = serde_json::to_string(&response).unwrap_or_else(|_| {
+        String::from(
+            r#"{"reply":"error","kind":"internal","message":"reponse non serialisable"}"#,
+        )
+    });
+
+    let mut stdout = std::io::stdout();
+    let _ = writeln!(stdout, "{encoded}");
+    let _ = stdout.flush();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

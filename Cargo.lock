@@ -157,6 +157,7 @@ name = "bootsel-helper"
 version = "0.1.0"
 dependencies = [
  "bootsel-core",
+ "libc",
  "serde_json",
  "windows 0.62.2",
 ]
