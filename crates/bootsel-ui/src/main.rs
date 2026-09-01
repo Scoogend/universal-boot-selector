@@ -52,6 +52,10 @@ fn main() {
     };
 
     tauri::Builder::default()
+        .setup(|app| {
+            start_device_watcher(app.handle().clone());
+            Ok(())
+        })
         .manage(state)
         .invoke_handler(tauri::generate_handler![
             commands::refresh,
@@ -65,6 +69,38 @@ fn main() {
         .run(tauri::generate_context!())
         .expect("lancement de l interface");
 }
+
+/// Relaie les branchements et retraits de peripheriques vers l'interface.
+///
+/// La surveillance est un simple signal : elle ne lit rien du peripherique.
+/// L'interface reagit en relancant un inventaire en lecture seule.
+///
+/// Un echec de demarrage n'est pas bloquant : l'application fonctionne
+/// simplement sans mise a jour automatique de la liste.
+#[cfg(windows)]
+fn start_device_watcher(app: tauri::AppHandle) {
+    use tauri::Emitter;
+
+    let receiver = match bootsel_platform::windows::hotplug::watch() {
+        Ok(receiver) => receiver,
+        Err(e) => {
+            eprintln!("Surveillance des peripheriques indisponible : {e}");
+            return;
+        }
+    };
+
+    std::thread::spawn(move || {
+        while receiver.recv().is_ok() {
+            // L'interface decide quoi faire ; on ne fait que la prevenir.
+            if app.emit("devices-changed", ()).is_err() {
+                return;
+            }
+        }
+    });
+}
+
+#[cfg(not(windows))]
+fn start_device_watcher(_app: tauri::AppHandle) {}
 
 fn print_help() {
     println!("Universal Boot Selector {}", env!("CARGO_PKG_VERSION"));

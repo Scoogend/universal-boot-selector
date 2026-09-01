@@ -1,0 +1,67 @@
+UNIVERSAL BOOT SELECTOR — Windows
+=================================
+
+DEMARRER
+--------
+Double-cliquez sur   bootsel.exe
+
+Windows affichera UNE invite d'elevation (UAC). Elle est necessaire :
+sous Windows, meme LIRE les entrees de demarrage du firmware exige des
+droits administrateur. Si vous refusez, l'application demarre quand meme
+et affiche vos disques ; elle proposera de reessayer.
+
+
+CE QUE FAIT L'APPLICATION
+-------------------------
+Elle ecrit UNE SEULE chose sur votre machine : la variable UEFI
+"BootNext", longue de deux octets, et uniquement quand vous confirmez
+un redemarrage.
+
+BootNext dit au firmware : "au prochain demarrage seulement, demarre
+sur ce systeme". Le firmware la consomme puis l'oublie.
+
+L'ordre de demarrage permanent (BootOrder) n'est JAMAIS modifie. Votre
+PC continue de demarrer normalement comme avant.
+
+
+CE QU'ELLE NE FAIT JAMAIS
+-------------------------
+  - modifier l'ordre de demarrage permanent
+  - formater, creer, supprimer ou redimensionner une partition
+  - modifier une table GPT ou MBR
+  - ecrire dans une partition EFI
+  - installer, remplacer ou reparer un chargeur de demarrage
+  - modifier Windows, Linux, ou vos donnees
+  - monter une partition pour la detecter
+  - demarrer sur quoi que ce soit sans que vous l'ayez demande
+
+Le code capable de faire ces choses n'existe pas dans le projet.
+
+
+SI QUELQUE CHOSE NE DEMARRE PAS
+-------------------------------
+Redemarrez simplement. Comme BootOrder n'a pas ete touche, le firmware
+retombe sur votre demarrage habituel, c'est-a-dire Windows.
+
+
+LES TROIS FICHIERS
+------------------
+  bootsel.exe          L'application. C'est celle-ci qu'on lance.
+  bootsel-helper.exe   Composant privilegie. Doit rester A COTE de
+                       bootsel.exe, sinon l'application ne pourra pas
+                       lire le firmware.
+  bootsel-cli.exe      Outil de diagnostic en ligne de commande.
+                       LECTURE SEULE : il ne sait rien ecrire.
+
+
+ESSAYER SANS RISQUE
+-------------------
+Depuis une invite de commandes, dans ce dossier :
+
+  bootsel.exe --mock-boot multi-os --dry-run --no-elevate
+
+Firmware simule, donnees inventees, aucun acces a votre materiel.
+
+  bootsel-cli.exe
+
+Affiche vos vrais disques et entrees de demarrage, sans rien modifier.

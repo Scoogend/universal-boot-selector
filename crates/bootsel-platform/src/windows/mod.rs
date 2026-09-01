@@ -7,6 +7,7 @@
 
 pub mod elevated;
 pub mod firmware;
+pub mod hotplug;
 pub mod power;
 pub mod storage;
 
