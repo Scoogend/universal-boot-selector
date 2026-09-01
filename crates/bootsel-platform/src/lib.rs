@@ -56,17 +56,17 @@ pub fn create_backend(options: &BackendOptions) -> Result<Box<dyn BootBackend>, 
             return Ok(Box::new(backend));
         }
 
-        // Le processus est deja eleve : inutile de lancer le helper, la
-        // lecture directe fonctionne et n'ouvre aucun canal supplementaire.
-        if windows::firmware::can_read_firmware() {
-            let backend = if options.read_only {
-                windows::WindowsBootBackend::read_only()
-            } else {
-                windows::WindowsBootBackend::new()
-            };
-            return Ok(Box::new(backend));
-        }
-
+        // Le helper est lance meme lorsque le processus est deja eleve.
+        //
+        // Une version precedente prenait un raccourci : puisque la lecture
+        // directe fonctionnait deja, elle rendait le backend local. Mais ce
+        // backend ne definit aucune ecriture — c'est justement sa raison
+        // d'etre — si bien qu'une application lancee en tant qu'administrateur
+        // affichait tout correctement puis refusait tout redemarrage, avec un
+        // message de privileges manquants incomprehensible.
+        //
+        // L'ecriture passe toujours par le helper. Depuis un processus deja
+        // eleve, son lancement n'affiche aucune invite supplementaire.
         let channel = elevate::launch_helper()?;
         let backend = if options.read_only {
             windows::elevated::ElevatedWindowsBackend::read_only(channel)
@@ -144,6 +144,30 @@ mod tests {
         })
         .expect("backend natif");
         assert!(backend.is_read_only());
+    }
+
+    /// Un backend construit avec `elevate` doit etre capable d'ecrire.
+    ///
+    /// Ce test existe a la suite d'un bug : le raccourci « deja eleve, donc
+    /// lecture directe » rendait un backend sans chemin d'ecriture, et
+    /// l'application refusait alors tout redemarrage.
+    #[cfg(windows)]
+    #[test]
+    fn an_elevated_backend_is_never_the_read_only_one() {
+        match create_backend(&BackendOptions {
+            mock_scenario: None,
+            read_only: false,
+            elevate: true,
+        }) {
+            Ok(backend) => assert_eq!(
+                backend.name(),
+                "windows-eleve",
+                "un backend eleve doit pouvoir ecrire, donc passer par le helper"
+            ),
+            // Helper absent ou elevation refusee : cas legitime, le bug vise
+            // ici est le silencieux, pas l'echec franc.
+            Err(_) => {}
+        }
     }
 
     #[cfg(feature = "mock")]
