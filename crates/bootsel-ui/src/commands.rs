@@ -246,15 +246,25 @@ pub fn set_preference(
 #[cfg(test)]
 mod tests {
 
-    /// Portion livree du fichier : tout ce qui precede ce module de test.
+    /// Portion livree du fichier : tout ce qui precede le module de test.
     ///
-    /// Indispensable pour un test qui inspecte son propre source : sans cette
-    /// coupure, les assertions se signaleraient elles-memes, puisqu elles
-    /// citent nommement ce qu elles interdisent.
-    fn shipped_source() -> &'static str {
-        let source = include_str!("commands.rs");
-        let end = source.find("#[cfg(test)]").unwrap_or(source.len());
-        &source[..end]
+    /// Deux precautions, apprises d un echec de CI :
+    ///
+    /// - les fins de ligne sont normalisees, car git peut livrer du CRLF sous
+    ///   Windows et un motif ecrit avec des LF ne correspondrait plus ;
+    /// - la coupure vise le **module** de test, pas le premier `#[cfg(test)]`
+    ///   venu : il en existe a l interieur de fonctions, et couper la
+    ///   amputerait le code livre que l on veut justement analyser.
+    fn shipped_source() -> String {
+        let source = include_str!("commands.rs").replace("
+", "
+");
+        match source.find("
+#[cfg(test)]
+mod tests") {
+            Some(end) => source[..end].to_string(),
+            None => source,
+        }
     }
 
     #[test]
@@ -281,7 +291,8 @@ mod tests {
     fn every_arming_is_guarded_by_a_platform_condition() {
         // Un armement non garde s appliquerait a toutes les plateformes et
         // echapperait a la revue plateforme par plateforme.
-        let lines: Vec<&str> = shipped_source().lines().collect();
+        let source = shipped_source();
+        let lines: Vec<&str> = source.lines().collect();
         for (index, line) in lines.iter().enumerate() {
             if !line.contains("arm_reboot()") {
                 continue;
@@ -298,7 +309,8 @@ mod tests {
     #[test]
     fn the_reboot_command_validates_before_arming() {
         // L armement doit venir apres le garde-fou, jamais avant.
-        let body = shipped_source()
+        let source = shipped_source();
+        let body = source
             .split("pub fn confirm_and_reboot")
             .nth(1)
             .expect("la commande de redemarrage doit exister");
@@ -340,7 +352,8 @@ mod tests {
     fn every_exposed_command_is_declared_in_the_handler() {
         // Une commande oubliee dans `generate_handler!` serait inutilisable ;
         // une commande presente mais non listee ici passerait inapercue.
-        let commands: Vec<&str> = shipped_source()
+        let source = shipped_source();
+        let commands: Vec<&str> = source
             .lines()
             .filter(|l| l.starts_with("pub fn "))
             .filter_map(|l| l.strip_prefix("pub fn "))

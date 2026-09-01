@@ -113,11 +113,25 @@ fn do_reboot() -> Result<(), BackendError> {
 mod tests {
     use super::*;
 
-    /// Portion livree du fichier, pour les controles de revue.
-    fn shipped_source() -> &'static str {
-        let source = include_str!("power.rs");
-        let end = source.find("#[cfg(test)]").unwrap_or(source.len());
-        &source[..end]
+    /// Portion livree du fichier : tout ce qui precede le module de test.
+    ///
+    /// Deux precautions, apprises d un echec de CI :
+    ///
+    /// - les fins de ligne sont normalisees, car git peut livrer du CRLF sous
+    ///   Windows et un motif ecrit avec des LF ne correspondrait plus ;
+    /// - la coupure vise le **module** de test, pas le premier `#[cfg(test)]`
+    ///   venu : il en existe a l interieur de fonctions, et couper la
+    ///   amputerait le code livre que l on veut justement analyser.
+    fn shipped_source() -> String {
+        let source = include_str!("power.rs").replace("
+", "
+");
+        match source.find("
+#[cfg(test)]
+mod tests") {
+            Some(end) => source[..end].to_string(),
+            None => source,
+        }
     }
 
     #[test]

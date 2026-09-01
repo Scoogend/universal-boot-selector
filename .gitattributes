@@ -1,0 +1,6 @@
+# Les tests de revue analysent le code source comme du texte et cherchent des
+# motifs multi-lignes. Une livraison en CRLF les ferait echouer sous Windows.
+# On impose donc des fins de ligne LF partout dans le code.
+* text=auto eol=lf
+*.png binary
+*.ico binary

@@ -191,16 +191,23 @@ mod tests {
 
     /// Portion livree du fichier : tout ce qui precede le module de test.
     ///
-    /// Sans cette coupure, le test se signalerait lui-meme, puisque ses
-    /// propres assertions citent les constantes qu'il interdit.
+    /// Deux precautions, apprises d un echec de CI :
+    ///
+    /// - les fins de ligne sont normalisees, car git peut livrer du CRLF sous
+    ///   Windows et un motif ecrit avec des LF ne correspondrait plus ;
+    /// - la coupure vise le **module** de test, pas le premier `#[cfg(test)]`
+    ///   venu : il en existe a l interieur de fonctions, et couper la
+    ///   amputerait le code livre que l on veut justement analyser.
     fn shipped_source() -> String {
-        let source = include_str!("power.rs");
-        let end = source.find("#[cfg(test)]").unwrap_or(source.len());
-        source[..end]
-            .lines()
-            .filter(|l| !l.trim_start().starts_with("//"))
-            .collect::<Vec<_>>()
-            .join("\n")
+        let source = include_str!("power.rs").replace("
+", "
+");
+        match source.find("
+#[cfg(test)]
+mod tests") {
+            Some(end) => source[..end].to_string(),
+            None => source,
+        }
     }
 
     #[test]
@@ -231,9 +238,8 @@ mod tests {
         // Deuxieme barriere, verifiee sur le source plutot qu'en armant le
         // verrou : armer une variable globale rendrait les tests dependants de
         // leur ordre d execution.
-        let source = include_str!("power.rs");
         assert!(
-            source.contains("#[cfg(not(test))]
+            shipped_source().contains("#[cfg(not(test))]
 fn do_reboot()"),
             "l appel systeme de redemarrage doit etre exclu des binaires de test"
         );

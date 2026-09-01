@@ -357,8 +357,13 @@ mod tests {
     #[test]
     fn this_module_defines_no_write_operation() {
         // Garde-fou de revue : l ecriture de BootNext appartient au helper.
-        let source = include_str!("firmware.rs");
-        let shipped = &source[..source.find("#[cfg(test)]").unwrap_or(source.len())];
+        let source = include_str!("firmware.rs").replace("
+", "
+");
+        let end = source.find("
+#[cfg(test)]
+mod tests").unwrap_or(source.len());
+        let shipped = &source[..end];
         for forbidden in ["fs::write", "fs::remove", "OpenOptions", "File::create"] {
             assert!(
                 !shipped.contains(forbidden),
